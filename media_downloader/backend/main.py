@@ -1,8 +1,6 @@
 from pathlib import Path
 from urllib.parse import urlparse
 import tempfile
-import shutil
-import os
 
 from fastapi import FastAPI, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
@@ -55,7 +53,7 @@ def validate_url(value: str) -> str:
 
 
 # ============================================================
-# PLATFORM
+# PLATFORM DETECTION
 # ============================================================
 
 def platform_for(url: str) -> str:
@@ -114,13 +112,13 @@ async def analyze_link(data: dict):
 
     url = validate_url(str(raw_url))
 
-    platform = platform_for(url)
-
     if yt_dlp is None:
         raise HTTPException(
             status_code=503,
             detail="yt-dlp is not installed."
         )
+
+    platform = platform_for(url)
 
     try:
 
@@ -194,10 +192,6 @@ async def download_link(
             detail="yt-dlp is not installed."
         )
 
-    # --------------------------------------------------------
-    # CREATE TEMP DIRECTORY
-    # --------------------------------------------------------
-
     temp_dir = Path(
         tempfile.mkdtemp(
             prefix="mp34_download_"
@@ -207,8 +201,7 @@ async def download_link(
     try:
 
         # ----------------------------------------------------
-        # IMPORTANT:
-        # Use a predictable output filename.
+        # Predictable output filename
         # ----------------------------------------------------
 
         output_template = str(
@@ -221,19 +214,14 @@ async def download_link(
 
             "noplaylist": True,
 
-            # Prefer a single downloadable file.
+            # Use one complete downloadable format.
             "format": "best",
 
             "outtmpl": output_template,
 
-            # Continue interrupted downloads when possible.
             "continuedl": True,
 
-            # Try to produce MP4 when merging is required.
             "merge_output_format": "mp4",
-
-            # Do not leave partial files behind.
-            "nopart": False,
         }
 
         print("=" * 60)
@@ -255,11 +243,14 @@ async def download_link(
 
         print("=" * 60)
         print("YT-DLP FINISHED")
-        print("TITLE:", info.get("title") if info else "unknown")
+        print(
+            "TITLE:",
+            info.get("title") if info else "unknown"
+        )
         print("=" * 60)
 
         # ----------------------------------------------------
-        # FIND THE ACTUAL FILE
+        # FIND ACTUAL CREATED FILE
         # ----------------------------------------------------
 
         files = []
@@ -269,39 +260,46 @@ async def download_link(
             if not file.is_file():
                 continue
 
-            # Ignore partial downloads.
             if file.name.endswith(".part"):
                 continue
 
-            # Ignore yt-dlp metadata.
             if file.name.endswith(".ytdl"):
                 continue
 
-            # Ignore zero-byte files.
             try:
+
                 if file.stat().st_size <= 0:
                     continue
+
             except Exception:
+
                 continue
 
             files.append(file)
 
         # ----------------------------------------------------
-        # DEBUG INFORMATION
+        # PRINT CREATED FILES
         # ----------------------------------------------------
 
         print("FILES CREATED:")
 
         for file in files:
+
             try:
+
                 print(
                     " -",
                     file.name,
                     file.stat().st_size,
                     "bytes"
                 )
+
             except Exception:
-                print(" -", file.name)
+
+                print(
+                    " -",
+                    file.name
+                )
 
         # ----------------------------------------------------
         # NO FILE
@@ -309,27 +307,31 @@ async def download_link(
 
         if not files:
 
-            # Show EVERYTHING that exists in the directory.
             all_items = []
 
             for item in temp_dir.rglob("*"):
                 all_items.append(str(item))
 
-            print("NOTHING USABLE WAS CREATED.")
-            print("DIRECTORY CONTENT:")
+            print(
+                "NO USABLE MEDIA FILE WAS CREATED."
+            )
+
+            print(
+                "DIRECTORY CONTENT:"
+            )
+
             print(all_items)
 
             raise HTTPException(
                 status_code=500,
                 detail=(
-                    "yt-dlp finished but no downloadable "
-                    "media file was created. "
-                    "Check the Render logs for the yt-dlp error."
+                    "yt-dlp finished but no media "
+                    "file was created."
                 )
             )
 
         # ----------------------------------------------------
-        # SELECT LARGEST MEDIA FILE
+        # SELECT LARGEST FILE
         # ----------------------------------------------------
 
         file_path = max(
@@ -342,7 +344,7 @@ async def download_link(
         print("=" * 60)
         print("FILE READY")
         print("FILE:", file_path)
-        print("SIZE:", file_size)
+        print("SIZE:", file_size, "bytes")
         print("=" * 60)
 
         if file_size <= 0:
@@ -353,7 +355,7 @@ async def download_link(
             )
 
         # ----------------------------------------------------
-        # DETERMINE MIME TYPE
+        # MIME TYPE
         # ----------------------------------------------------
 
         extension = file_path.suffix.lower()

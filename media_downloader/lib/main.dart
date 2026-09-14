@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:media_store_plus/media_store_plus.dart';
 
-import 'home.dart';
+import '/home.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -18,6 +18,7 @@ Future<void> main() async {
 
 class MP34DownloaderApp
     extends StatelessWidget {
+
   const MP34DownloaderApp({
     super.key,
   });
@@ -26,18 +27,29 @@ class MP34DownloaderApp
   Widget build(
     BuildContext context,
   ) {
+
     return MaterialApp(
       debugShowCheckedModeBanner:
           false,
-      title: 'MP34 Downloader',
-      theme: ThemeData(
+
+      title:
+          'MP34 Downloader',
+
+      theme:
+          ThemeData(
         useMaterial3: true,
+
         colorSchemeSeed:
             Colors.blue,
+
         scaffoldBackgroundColor:
-            const Color(0xFFF7F9FC),
+            const Color(
+          0xFFF7F9FC,
+        ),
       ),
-      home: const Homepage(),
+
+      home:
+          const Homepage(),
     );
   }
 }

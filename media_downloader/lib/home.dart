@@ -5,18 +5,24 @@ import '../models/analyser.dart';
 import '../services/media_api.dart';
 
 class Homepage extends StatefulWidget {
-  const Homepage({super.key});
+  const Homepage({
+    super.key,
+  });
 
   @override
   State<Homepage> createState() =>
       _HomepageState();
 }
 
-class _HomepageState extends State<Homepage> {
-  final TextEditingController _urlController =
+class _HomepageState
+    extends State<Homepage> {
+
+  final TextEditingController
+      _urlController =
       TextEditingController();
 
-  final MediaApi _api = MediaApi.instance;
+  final MediaApi _api =
+      MediaApi.instance;
 
   MediaInfo? _media;
 
@@ -42,14 +48,19 @@ class _HomepageState extends State<Homepage> {
   // ============================================================
 
   Future<void> _analyze() async {
-    final url = _urlController.text.trim();
+
+    final url =
+        _urlController.text.trim();
 
     if (url.isEmpty) {
-      _showError('Please enter a media URL.');
+      _showError(
+        'Please enter a media URL.',
+      );
       return;
     }
 
-    FocusScope.of(context).unfocus();
+    FocusScope.of(context)
+        .unfocus();
 
     setState(() {
       _isAnalyzing = true;
@@ -60,8 +71,11 @@ class _HomepageState extends State<Homepage> {
     });
 
     try {
+
       final media =
-          await _api.analyze(url);
+          await _api.analyze(
+        url,
+      );
 
       if (!mounted) return;
 
@@ -69,12 +83,15 @@ class _HomepageState extends State<Homepage> {
         _media = media;
         _isAnalyzing = false;
       });
+
     } catch (error) {
+
       if (!mounted) return;
 
       setState(() {
         _isAnalyzing = false;
-        _errorMessage = error.toString();
+        _errorMessage =
+            error.toString();
       });
     }
   }
@@ -84,15 +101,18 @@ class _HomepageState extends State<Homepage> {
   // ============================================================
 
   Future<void> _download() async {
+
     final media = _media;
 
     if (media == null) {
       return;
     }
 
-    FocusScope.of(context).unfocus();
+    FocusScope.of(context)
+        .unfocus();
 
-    _cancelToken = CancelToken();
+    _cancelToken =
+        CancelToken();
 
     setState(() {
       _isDownloading = true;
@@ -103,44 +123,69 @@ class _HomepageState extends State<Homepage> {
     });
 
     try {
+
       final savedPath =
           await _api.download(
         media,
-        cancelToken: _cancelToken,
-        onProgress: (progress) {
-          if (!mounted) return;
+        cancelToken:
+            _cancelToken,
+        onProgress:
+            (progress) {
+
+          if (!mounted) {
+            return;
+          }
 
           setState(() {
-            _progress = progress;
+            _progress =
+                progress;
           });
         },
       );
 
-      if (!mounted) return;
+      if (!mounted) {
+        return;
+      }
 
       setState(() {
         _isDownloading = false;
         _downloadComplete = true;
         _progress = 1.0;
-        _savedFileName = savedPath;
+        _savedFileName =
+            savedPath;
       });
+
     } on DownloadCancelledException {
-      if (!mounted) return;
+
+      if (!mounted) {
+        return;
+      }
 
       setState(() {
         _isDownloading = false;
         _progress = 0.0;
       });
-    } on MediaApiException catch (error) {
-      if (!mounted) return;
+
+    } on MediaApiException catch (
+      error
+    ) {
+
+      if (!mounted) {
+        return;
+      }
 
       setState(() {
         _isDownloading = false;
         _progress = 0.0;
-        _errorMessage = error.message;
+        _errorMessage =
+            error.message;
       });
+
     } catch (error) {
-      if (!mounted) return;
+
+      if (!mounted) {
+        return;
+      }
 
       setState(() {
         _isDownloading = false;
@@ -148,7 +193,9 @@ class _HomepageState extends State<Homepage> {
         _errorMessage =
             'Download failed: $error';
       });
+
     } finally {
+
       _cancelToken = null;
     }
   }
@@ -158,23 +205,31 @@ class _HomepageState extends State<Homepage> {
   // ============================================================
 
   void _cancelDownload() {
+
     if (_cancelToken != null &&
-        !_cancelToken!.isCancelled) {
+        !_cancelToken!
+            .isCancelled) {
+
       _cancelToken!.cancel();
     }
   }
 
   // ============================================================
-  // ERROR
+  // ERROR SNACKBAR
   // ============================================================
 
-  void _showError(String message) {
+  void _showError(
+    String message,
+  ) {
+
     ScaffoldMessenger.of(context)
       ..hideCurrentSnackBar()
       ..showSnackBar(
         SnackBar(
-          content: Text(message),
-          behavior: SnackBarBehavior.floating,
+          content:
+              Text(message),
+          behavior:
+              SnackBarBehavior.floating,
         ),
       );
   }
@@ -184,69 +239,111 @@ class _HomepageState extends State<Homepage> {
   // ============================================================
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(
+    BuildContext context,
+  ) {
+
     final theme =
         Theme.of(context);
 
     return Scaffold(
+
       appBar: AppBar(
         title: const Text(
           'MP34 Downloader',
           style: TextStyle(
-            fontWeight: FontWeight.bold,
+            fontWeight:
+                FontWeight.bold,
           ),
         ),
         centerTitle: true,
       ),
 
       body: SafeArea(
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.all(20),
-          child: Column(
+
+        child:
+            SingleChildScrollView(
+
+          padding:
+              const EdgeInsets.all(
+            20,
+          ),
+
+          child:
+              Column(
+
             crossAxisAlignment:
-                CrossAxisAlignment.stretch,
+                CrossAxisAlignment
+                    .stretch,
+
             children: [
-              const SizedBox(height: 10),
+
+              const SizedBox(
+                height: 10,
+              ),
 
               // ------------------------------------------------
-              // HEADER
+              // ICON
               // ------------------------------------------------
 
               Icon(
                 Icons.download_rounded,
                 size: 64,
                 color:
-                    theme.colorScheme.primary,
+                    theme.colorScheme
+                        .primary,
               ),
 
-              const SizedBox(height: 12),
+              const SizedBox(
+                height: 12,
+              ),
+
+              // ------------------------------------------------
+              // TITLE
+              // ------------------------------------------------
 
               Text(
                 'Download Media',
-                textAlign: TextAlign.center,
-                style: theme.textTheme.headlineSmall?.copyWith(
-                  fontWeight: FontWeight.bold,
+                textAlign:
+                    TextAlign.center,
+                style:
+                    theme.textTheme
+                        .headlineSmall
+                        ?.copyWith(
+                  fontWeight:
+                      FontWeight.bold,
                 ),
               ),
 
-              const SizedBox(height: 6),
+              const SizedBox(
+                height: 6,
+              ),
 
               Text(
                 'Paste a media link below to analyse and download it.',
-                textAlign: TextAlign.center,
-                style: theme.textTheme.bodyMedium?.copyWith(
-                  color: Colors.grey.shade600,
+                textAlign:
+                    TextAlign.center,
+                style:
+                    theme.textTheme
+                        .bodyMedium
+                        ?.copyWith(
+                  color:
+                      Colors.grey
+                          .shade600,
                 ),
               ),
 
-              const SizedBox(height: 24),
+              const SizedBox(
+                height: 24,
+              ),
 
               // ------------------------------------------------
               // URL FIELD
               // ------------------------------------------------
 
               TextField(
-                controller: _urlController,
+                controller:
+                    _urlController,
                 keyboardType:
                     TextInputType.url,
                 enabled:
@@ -263,7 +360,8 @@ class _HomepageState extends State<Homepage> {
                     Icons.link,
                   ),
                   suffixIcon:
-                      _urlController.text
+                      _urlController
+                              .text
                               .isNotEmpty
                           ? IconButton(
                               icon:
@@ -272,6 +370,7 @@ class _HomepageState extends State<Homepage> {
                               ),
                               onPressed:
                                   () {
+
                                 _urlController
                                     .clear();
 
@@ -284,44 +383,55 @@ class _HomepageState extends State<Homepage> {
                   border:
                       OutlineInputBorder(
                     borderRadius:
-                        BorderRadius.circular(
+                        BorderRadius
+                            .circular(
                       16,
                     ),
                   ),
                 ),
-                onChanged: (_) {
-                  setState(() {});
+                onChanged:
+                    (_) {
+                  setState(
+                    () {},
+                  );
                 },
               ),
 
-              const SizedBox(height: 14),
+              const SizedBox(
+                height: 14,
+              ),
 
               // ------------------------------------------------
-              // ANALYZE BUTTON
+              // ANALYZE
               // ------------------------------------------------
 
               SizedBox(
                 height: 52,
-                child: FilledButton.icon(
+                child:
+                    FilledButton.icon(
                   onPressed:
                       (_isAnalyzing ||
                               _isDownloading)
                           ? null
                           : _analyze,
-                  icon: _isAnalyzing
-                      ? const SizedBox(
-                          width: 20,
-                          height: 20,
-                          child:
-                              CircularProgressIndicator(
-                            strokeWidth: 2,
-                            color: Colors.white,
-                          ),
-                        )
-                      : const Icon(
-                          Icons.search,
-                        ),
-                  label: Text(
+                  icon:
+                      _isAnalyzing
+                          ? const SizedBox(
+                              width: 20,
+                              height: 20,
+                              child:
+                                  CircularProgressIndicator(
+                                strokeWidth:
+                                    2,
+                                color:
+                                    Colors.white,
+                              ),
+                            )
+                          : const Icon(
+                              Icons.search,
+                            ),
+                  label:
+                      Text(
                     _isAnalyzing
                         ? 'Analysing...'
                         : 'Analyse Link',
@@ -333,47 +443,65 @@ class _HomepageState extends State<Homepage> {
               // ERROR
               // ------------------------------------------------
 
-              if (_errorMessage != null) ...[
-                const SizedBox(height: 18),
+              if (_errorMessage !=
+                  null) ...[
+
+                const SizedBox(
+                  height: 18,
+                ),
 
                 Container(
                   padding:
-                      const EdgeInsets.all(14),
+                      const EdgeInsets
+                          .all(
+                    14,
+                  ),
                   decoration:
                       BoxDecoration(
                     borderRadius:
-                        BorderRadius.circular(
+                        BorderRadius
+                            .circular(
                       14,
                     ),
                     color:
-                        Colors.red.withOpacity(
+                        Colors.red
+                            .withOpacity(
                       0.08,
                     ),
                     border:
                         Border.all(
                       color:
-                          Colors.red.withOpacity(
+                          Colors.red
+                              .withOpacity(
                         0.3,
                       ),
                     ),
                   ),
                   child: Row(
                     crossAxisAlignment:
-                        CrossAxisAlignment.start,
+                        CrossAxisAlignment
+                            .start,
                     children: [
+
                       const Icon(
-                        Icons.error_outline,
-                        color: Colors.red,
+                        Icons
+                            .error_outline,
+                        color:
+                            Colors.red,
                       ),
+
                       const SizedBox(
                         width: 10,
                       ),
+
                       Expanded(
-                        child: Text(
+                        child:
+                            Text(
                           _errorMessage!,
                           style:
                               const TextStyle(
-                            color: Colors.red,
+                            color:
+                                Colors.red,
                           ),
                         ),
                       ),
@@ -383,11 +511,14 @@ class _HomepageState extends State<Homepage> {
               ],
 
               // ------------------------------------------------
-              // MEDIA INFORMATION
+              // MEDIA CARD
               // ------------------------------------------------
 
               if (_media != null) ...[
-                const SizedBox(height: 24),
+
+                const SizedBox(
+                  height: 24,
+                ),
 
                 _buildMediaCard(
                   _media!,
@@ -395,11 +526,14 @@ class _HomepageState extends State<Homepage> {
               ],
 
               // ------------------------------------------------
-              // DOWNLOAD PROGRESS
+              // PROGRESS
               // ------------------------------------------------
 
               if (_isDownloading) ...[
-                const SizedBox(height: 20),
+
+                const SizedBox(
+                  height: 20,
+                ),
 
                 _buildProgressCard(),
               ],
@@ -409,7 +543,10 @@ class _HomepageState extends State<Homepage> {
               // ------------------------------------------------
 
               if (_downloadComplete) ...[
-                const SizedBox(height: 20),
+
+                const SizedBox(
+                  height: 20,
+                ),
 
                 _buildCompleteCard(),
               ],
@@ -427,32 +564,49 @@ class _HomepageState extends State<Homepage> {
   Widget _buildMediaCard(
     MediaInfo media,
   ) {
+
     return Card(
       elevation: 2,
       clipBehavior:
           Clip.antiAlias,
-      child: Column(
+
+      child:
+          Column(
+
         crossAxisAlignment:
-            CrossAxisAlignment.start,
+            CrossAxisAlignment
+                .start,
+
         children: [
-          if (media.thumbnail.isNotEmpty)
+
+          if (media.thumbnail
+              .isNotEmpty)
+
             SizedBox(
               height: 210,
-              width: double.infinity,
-              child: Image.network(
+              width:
+                  double.infinity,
+
+              child:
+                  Image.network(
                 media.thumbnail,
                 fit: BoxFit.cover,
+
                 errorBuilder:
                     (
                   context,
                   error,
                   stackTrace,
                 ) {
+
                   return Container(
                     color:
-                        Colors.grey.shade200,
-                    child: const Center(
-                      child: Icon(
+                        Colors.grey
+                            .shade200,
+                    child:
+                        const Center(
+                      child:
+                          Icon(
                         Icons
                             .image_not_supported_outlined,
                         size: 50,
@@ -460,12 +614,14 @@ class _HomepageState extends State<Homepage> {
                     ),
                   );
                 },
+
                 loadingBuilder:
                     (
                   context,
                   child,
                   loadingProgress,
                 ) {
+
                   if (loadingProgress ==
                       null) {
                     return child;
@@ -481,59 +637,83 @@ class _HomepageState extends State<Homepage> {
 
           Padding(
             padding:
-                const EdgeInsets.all(16),
-            child: Column(
+                const EdgeInsets.all(
+              16,
+            ),
+
+            child:
+                Column(
+
               crossAxisAlignment:
-                  CrossAxisAlignment.start,
+                  CrossAxisAlignment
+                      .start,
+
               children: [
+
                 Text(
                   media.title,
                   maxLines: 3,
                   overflow:
-                      TextOverflow.ellipsis,
-                  style: const TextStyle(
+                      TextOverflow
+                          .ellipsis,
+                  style:
+                      const TextStyle(
                     fontSize: 18,
                     fontWeight:
                         FontWeight.bold,
                   ),
                 ),
 
-                const SizedBox(height: 8),
+                const SizedBox(
+                  height: 8,
+                ),
 
                 Row(
                   children: [
+
                     const Icon(
                       Icons.public,
                       size: 18,
                     ),
+
                     const SizedBox(
                       width: 6,
                     ),
+
                     Text(
                       media.platform,
                       style:
                           TextStyle(
-                        color: Colors
-                            .grey.shade700,
+                        color:
+                            Colors.grey
+                                .shade700,
                       ),
                     ),
                   ],
                 ),
 
-                const SizedBox(height: 16),
+                const SizedBox(
+                  height: 16,
+                ),
 
                 SizedBox(
-                  width: double.infinity,
+                  width:
+                      double.infinity,
                   height: 52,
-                  child: FilledButton.icon(
+
+                  child:
+                      FilledButton.icon(
                     onPressed:
                         _isDownloading
                             ? null
                             : _download,
-                    icon: const Icon(
-                      Icons.download_rounded,
+                    icon:
+                        const Icon(
+                      Icons
+                          .download_rounded,
                     ),
-                    label: const Text(
+                    label:
+                        const Text(
                       'Download',
                     ),
                   ),
@@ -551,37 +731,62 @@ class _HomepageState extends State<Homepage> {
   // ============================================================
 
   Widget _buildProgressCard() {
+
     final percentage =
         (_progress * 100)
             .clamp(0, 99.5);
 
+    final isSaving =
+        _progress >= 0.99;
+
     return Card(
-      child: Padding(
+
+      child:
+          Padding(
+
         padding:
-            const EdgeInsets.all(18),
-        child: Column(
+            const EdgeInsets.all(
+          18,
+        ),
+
+        child:
+            Column(
+
           crossAxisAlignment:
-              CrossAxisAlignment.start,
+              CrossAxisAlignment
+                  .start,
+
           children: [
+
             Row(
               children: [
-                const Icon(
-                  Icons.downloading_rounded,
+
+                Icon(
+                  isSaving
+                      ? Icons.save_rounded
+                      : Icons
+                          .downloading_rounded,
                 ),
+
                 const SizedBox(
                   width: 10,
                 ),
-                const Expanded(
-                  child: Text(
-                    'Downloading...',
+
+                Expanded(
+                  child:
+                      Text(
+                    isSaving
+                        ? 'Saving...'
+                        : 'Downloading...',
                     style:
-                        TextStyle(
+                        const TextStyle(
                       fontWeight:
                           FontWeight.bold,
                       fontSize: 16,
                     ),
                   ),
                 ),
+
                 Text(
                   '${percentage.toStringAsFixed(0)}%',
                   style:
@@ -593,43 +798,58 @@ class _HomepageState extends State<Homepage> {
               ],
             ),
 
-            const SizedBox(height: 14),
+            const SizedBox(
+              height: 14,
+            ),
 
             LinearProgressIndicator(
               value: _progress,
               minHeight: 8,
               borderRadius:
-                  BorderRadius.circular(
+                  BorderRadius
+                      .circular(
                 10,
               ),
             ),
 
-            const SizedBox(height: 14),
+            const SizedBox(
+              height: 14,
+            ),
 
             Text(
-              _progress >= 0.99
+              isSaving
                   ? 'Saving file to your device...'
                   : 'Downloading ${_media?.title ?? ''}',
               maxLines: 2,
               overflow:
                   TextOverflow.ellipsis,
-              style: TextStyle(
+              style:
+                  TextStyle(
                 color:
-                    Colors.grey.shade600,
+                    Colors.grey
+                        .shade600,
               ),
             ),
 
-            const SizedBox(height: 16),
+            const SizedBox(
+              height: 16,
+            ),
 
             SizedBox(
-              width: double.infinity,
-              child: OutlinedButton.icon(
+              width:
+                  double.infinity,
+
+              child:
+                  OutlinedButton.icon(
                 onPressed:
                     _cancelDownload,
-                icon: const Icon(
-                  Icons.cancel_outlined,
+                icon:
+                    const Icon(
+                  Icons
+                      .cancel_outlined,
                 ),
-                label: const Text(
+                label:
+                    const Text(
                   'Cancel Download',
                 ),
               ),
@@ -645,43 +865,66 @@ class _HomepageState extends State<Homepage> {
   // ============================================================
 
   Widget _buildCompleteCard() {
+
     return Card(
-      child: Padding(
+
+      child:
+          Padding(
+
         padding:
-            const EdgeInsets.all(18),
-        child: Column(
+            const EdgeInsets.all(
+          18,
+        ),
+
+        child:
+            Column(
+
           children: [
+
             const Icon(
-              Icons.check_circle_rounded,
+              Icons
+                  .check_circle_rounded,
               size: 58,
-              color: Colors.green,
+              color:
+                  Colors.green,
             ),
 
-            const SizedBox(height: 10),
+            const SizedBox(
+              height: 10,
+            ),
 
             const Text(
               'Download Complete',
-              style: TextStyle(
+              style:
+                  TextStyle(
                 fontSize: 19,
                 fontWeight:
                     FontWeight.bold,
               ),
             ),
 
-            const SizedBox(height: 6),
+            const SizedBox(
+              height: 6,
+            ),
 
             Text(
               'Your media has been saved to your device.',
               textAlign:
                   TextAlign.center,
-              style: TextStyle(
+              style:
+                  TextStyle(
                 color:
-                    Colors.grey.shade600,
+                    Colors.grey
+                        .shade600,
               ),
             ),
 
-            if (_savedFileName != null) ...[
-              const SizedBox(height: 10),
+            if (_savedFileName !=
+                null) ...[
+
+              const SizedBox(
+                height: 10,
+              ),
 
               Text(
                 _savedFileName!,
@@ -689,7 +932,8 @@ class _HomepageState extends State<Homepage> {
                     TextAlign.center,
                 maxLines: 2,
                 overflow:
-                    TextOverflow.ellipsis,
+                    TextOverflow
+                        .ellipsis,
                 style:
                     const TextStyle(
                   fontWeight:
@@ -698,21 +942,29 @@ class _HomepageState extends State<Homepage> {
               ),
             ],
 
-            const SizedBox(height: 16),
+            const SizedBox(
+              height: 16,
+            ),
 
             SizedBox(
-              width: double.infinity,
-              child: OutlinedButton.icon(
+              width:
+                  double.infinity,
+
+              child:
+                  OutlinedButton.icon(
                 onPressed: () {
+
                   setState(() {
                     _downloadComplete =
                         false;
                   });
                 },
-                icon: const Icon(
+                icon:
+                    const Icon(
                   Icons.download,
                 ),
-                label: const Text(
+                label:
+                    const Text(
                   'Download Again',
                 ),
               ),
