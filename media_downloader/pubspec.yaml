@@ -1,0 +1,27 @@
+name: media_downloader
+description: "A new Flutter project."
+publish_to: 'none'
+version: 0.1.0+1
+
+environment:
+  sdk: ^3.12.0-327.3.beta
+
+dependencies:
+  dio: ^5.11.1
+  flutter:
+    sdk: flutter
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+
+flutter:
+  uses-material-design: true
+
+  assets:
+    - lib/asset/instagram.png
+    - lib/asset/facebook.png
+    - lib/asset/tiktok.png
+    - lib/asset/youtube.png
+    - lib/asset/1.png
