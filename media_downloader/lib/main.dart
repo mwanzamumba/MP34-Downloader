@@ -1,5 +1,3 @@
-import 'dart:io';
-
 import 'package:flutter/material.dart';
 import 'package:media_store_plus/media_store_plus.dart';
 
@@ -8,17 +6,14 @@ import 'home.dart';
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  if (Platform.isAndroid) {
-    await MediaStore.ensureInitialized();
+  await MediaStore.ensureInitialized();
+  MediaStore.appFolder = 'MP34 Downloader';
 
-    MediaStore.appFolder = 'MP34 Downloader';
-  }
-
-  runApp(const MyApp());
+  runApp(const MP34DownloaderApp());
 }
 
-class MyApp extends StatelessWidget {
-  const MyApp({super.key});
+class MP34DownloaderApp extends StatelessWidget {
+  const MP34DownloaderApp({super.key});
 
   @override
   Widget build(BuildContext context) {
@@ -29,9 +24,7 @@ class MyApp extends StatelessWidget {
         useMaterial3: true,
         colorSchemeSeed: Colors.blue,
       ),
-      home: const Homepage(
-        username: 'User',
-      ),
+      home: const Homepage(),
     );
   }
 }

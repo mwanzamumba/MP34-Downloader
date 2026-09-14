@@ -5,12 +5,7 @@ import '../models/analyser.dart';
 import '../services/media_api.dart';
 
 class Homepage extends StatefulWidget {
-  const Homepage({
-    super.key,
-    required this.username,
-  });
-
-  final String username;
+  const Homepage({super.key});
 
   @override
   State<Homepage> createState() => _HomepageState();
@@ -30,38 +25,40 @@ class _HomepageState extends State<Homepage> {
   bool _isDownloading = false;
   bool _isPaused = false;
 
+  // Used to distinguish CANCEL from PAUSE.
+  bool _cancelRequested = false;
+
   double _downloadProgress = 0;
 
+  int _receivedBytes = 0;
+  int _totalBytes = 0;
+
   String? _errorMessage;
+
   String? _downloadedFileName;
   String? _downloadLocation;
 
   @override
   void dispose() {
     _urlController.dispose();
-
-    _downloadCancelToken?.cancel(
-      'Page disposed',
-    );
-
     super.dispose();
   }
 
-  // ==========================================================
+  // ============================================================
   // ANALYZE
-  // ==========================================================
+  // ============================================================
 
   Future<void> _analyzeMedia() async {
-    FocusScope.of(context).unfocus();
-
     final url = _urlController.text.trim();
 
     if (url.isEmpty) {
-      _showMessage(
-        'Paste a media link first.',
-      );
+      setState(() {
+        _errorMessage = 'Please enter a media URL.';
+      });
       return;
     }
+
+    FocusScope.of(context).unfocus();
 
     setState(() {
       _isAnalyzing = true;
@@ -70,527 +67,495 @@ class _HomepageState extends State<Homepage> {
       _downloadedFileName = null;
       _downloadLocation = null;
       _downloadProgress = 0;
+      _receivedBytes = 0;
+      _totalBytes = 0;
     });
 
     try {
-      final result = await _mediaApi.analyse(url);
+      final media = await _mediaApi.analyse(url);
 
-      if (!mounted) {
-        return;
-      }
+      if (!mounted) return;
 
       setState(() {
-        _media = result;
+        _media = media;
+        _isAnalyzing = false;
       });
-    } on MediaApiException catch (error) {
-      if (!mounted) {
-        return;
-      }
-
-      setState(() {
-        _errorMessage = error.message;
-      });
-
-      _showMessage(
-        error.message,
-      );
     } catch (error) {
-      if (!mounted) {
-        return;
-      }
+      if (!mounted) return;
 
       setState(() {
+        _isAnalyzing = false;
         _errorMessage = error.toString();
       });
-
-      _showMessage(
-        'Could not analyze this link.',
-      );
-    } finally {
-      if (mounted) {
-        setState(() {
-          _isAnalyzing = false;
-        });
-      }
     }
   }
 
-  // ==========================================================
-  // DOWNLOAD
-  // ==========================================================
+  // ============================================================
+  // START DOWNLOAD
+  // ============================================================
 
-  Future<void> _downloadMedia() async {
-    if (_media == null) {
-      _showMessage(
-        'Analyze the link before downloading.',
-      );
+  Future<void> _startDownload() async {
+    final media = _media;
+
+    if (media == null) {
       return;
     }
 
+    // Prevent duplicate download requests.
     if (_isDownloading) {
       return;
     }
 
-    final sourceUrl = _media!.sourceUrl;
-
-    if (sourceUrl.trim().isEmpty) {
-      _showMessage(
-        'No source URL was returned by the server.',
-      );
-      return;
-    }
-
-    final title = _media!.title;
-
-    _downloadCancelToken = CancelToken();
-
     setState(() {
       _isDownloading = true;
       _isPaused = false;
-      _downloadProgress = 0;
+      _cancelRequested = false;
       _errorMessage = null;
-      _downloadedFileName = null;
-      _downloadLocation = null;
     });
+
+    final cancelToken = CancelToken();
+
+    _downloadCancelToken = cancelToken;
 
     try {
       final result = await _mediaApi.download(
-        sourceUrl,
-        title: title,
-        cancelToken: _downloadCancelToken,
+        media,
+        cancelToken: cancelToken,
         onProgress: (received, total) {
-          if (!mounted) {
-            return;
-          }
+          if (!mounted) return;
 
-          if (total > 0) {
-            setState(() {
+          setState(() {
+            _receivedBytes = received;
+            _totalBytes = total;
+
+            if (total > 0) {
               _downloadProgress =
                   (received / total).clamp(0.0, 1.0);
-            });
-          }
+            }
+          });
         },
       );
 
-      if (!mounted) {
-        return;
-      }
+      if (!mounted) return;
 
       setState(() {
-        _downloadProgress = 1;
+        _isDownloading = false;
+        _isPaused = false;
+        _cancelRequested = false;
+        _downloadProgress = 1.0;
         _downloadedFileName = result.fileName;
         _downloadLocation = result.location;
+      });
+    } on DownloadPausedException {
+      if (!mounted) return;
+
+      setState(() {
         _isDownloading = false;
-        _isPaused = false;
+        _isPaused = true;
       });
 
-      _showMessage(
-        'Download complete.',
+      await _mediaApi.showPaused(
+        _media?.title ?? 'Download',
       );
     } on DownloadCancelledException {
-      if (!mounted) {
-        return;
-      }
+      // --------------------------------------------------------
+      // CANCEL:
+      // Delete the partial file.
+      // --------------------------------------------------------
 
-      setState(() {
-        _isDownloading = false;
-      });
-    } on MediaApiException catch (error) {
-      if (!mounted) {
-        return;
-      }
+      await _mediaApi.deletePartialDownload(media);
+
+      if (!mounted) return;
 
       setState(() {
         _isDownloading = false;
         _isPaused = false;
-        _errorMessage = error.message;
-      });
+        _cancelRequested = false;
 
-      _showMessage(
-        error.message,
-      );
+        _downloadProgress = 0;
+        _receivedBytes = 0;
+        _totalBytes = 0;
+      });
     } catch (error) {
-      if (!mounted) {
-        return;
-      }
+      if (!mounted) return;
 
       setState(() {
         _isDownloading = false;
         _isPaused = false;
+        _cancelRequested = false;
         _errorMessage = error.toString();
       });
 
-      _showMessage(
-        'Download failed.',
+      await _mediaApi.showFailed(
+        error.toString(),
       );
     } finally {
       _downloadCancelToken = null;
     }
   }
 
-  // ==========================================================
+  // ============================================================
   // PAUSE
-  // ==========================================================
+  // ============================================================
 
-  Future<void> _pauseDownload() async {
+  void _pauseDownload() {
     if (!_isDownloading) {
       return;
     }
 
-    setState(() {
-      _isPaused = true;
-    });
+    if (_downloadCancelToken == null) {
+      return;
+    }
 
-    _downloadCancelToken?.cancel(
-      'Download paused',
-    );
+    _cancelRequested = false;
+
+    // IMPORTANT:
+    // Do NOT delete the .part file.
+    //
+    // MediaApi will keep it so Resume can continue from
+    // the existing number of bytes.
+    _downloadCancelToken!.cancel('pause');
   }
 
-  // ==========================================================
+  // ============================================================
   // RESUME
-  // ==========================================================
+  // ============================================================
 
   Future<void> _resumeDownload() async {
     if (!_isPaused) {
       return;
     }
 
+    if (_media == null) {
+      return;
+    }
+
+    // ----------------------------------------------------------
+    // IMPORTANT FIX:
+    //
+    // We MUST set _isDownloading to false before calling
+    // _startDownload().
+    //
+    // Otherwise _startDownload() sees:
+    //
+    //     _isDownloading == true
+    //
+    // and immediately returns.
+    //
+    // This was the reason Resume could appear to do nothing.
+    // ----------------------------------------------------------
+
     setState(() {
       _isPaused = false;
+      _isDownloading = false;
+      _errorMessage = null;
     });
 
-    // The current backend does not support HTTP range resume.
-    // Therefore this starts the transfer again.
-    await _downloadMedia();
+    await _startDownload();
   }
 
-  // ==========================================================
+  // ============================================================
   // CANCEL
-  // ==========================================================
+  // ============================================================
 
-  Future<void> _cancelDownload() async {
-    if (!_isDownloading && !_isPaused) {
+  void _cancelDownload() {
+    if (!_isDownloading) {
       return;
     }
 
-    _downloadCancelToken?.cancel(
-      'Download cancelled by user',
-    );
-
-    if (!mounted) {
+    if (_downloadCancelToken == null) {
       return;
     }
 
+    _cancelRequested = true;
+
+    // IMPORTANT:
+    // We don't delete the partial file here.
+    //
+    // We let MediaApi finish closing the file first.
+    //
+    // _startDownload() catches DownloadCancelledException
+    // and then deletes the partial file safely.
+    _downloadCancelToken!.cancel('cancel');
+  }
+
+  // ============================================================
+  // CLEAR
+  // ============================================================
+
+  void _clearMedia() {
     setState(() {
+      _media = null;
+      _downloadedFileName = null;
+      _downloadLocation = null;
+      _errorMessage = null;
+
+      _downloadProgress = 0;
+      _receivedBytes = 0;
+      _totalBytes = 0;
+
       _isDownloading = false;
       _isPaused = false;
-      _downloadProgress = 0;
+      _cancelRequested = false;
     });
 
-    _showMessage(
-      'Download cancelled.',
-    );
+    _urlController.clear();
   }
 
-  // ==========================================================
-  // MESSAGE
-  // ==========================================================
+  // ============================================================
+  // PLATFORM ICON
+  // ============================================================
 
-  void _showMessage(String message) {
-    if (!mounted) {
-      return;
+  IconData _platformIcon(String platform) {
+    final value = platform.toLowerCase();
+
+    if (value.contains('youtube')) {
+      return Icons.smart_display;
     }
 
-    ScaffoldMessenger.of(context)
-      ..hideCurrentSnackBar()
-      ..showSnackBar(
-        SnackBar(
-          content: Text(message),
-          behavior: SnackBarBehavior.floating,
-        ),
-      );
+    if (value.contains('facebook')) {
+      return Icons.facebook;
+    }
+
+    if (value.contains('instagram')) {
+      return Icons.camera_alt;
+    }
+
+    if (value.contains('tiktok')) {
+      return Icons.music_note;
+    }
+
+    if (value.contains('twitter') ||
+        value.contains('x /')) {
+      return Icons.alternate_email;
+    }
+
+    return Icons.public;
   }
 
-  // ==========================================================
-  // BUILD
-  // ==========================================================
+  // ============================================================
+  // FORMAT BYTES
+  // ============================================================
+
+  String _formatBytes(int bytes) {
+    if (bytes <= 0) {
+      return '0 B';
+    }
+
+    const units = [
+      'B',
+      'KB',
+      'MB',
+      'GB',
+    ];
+
+    double size = bytes.toDouble();
+    int unitIndex = 0;
+
+    while (size >= 1024 &&
+        unitIndex < units.length - 1) {
+      size /= 1024;
+      unitIndex++;
+    }
+
+    return '${size.toStringAsFixed(size >= 100 ? 0 : 1)} ${units[unitIndex]}';
+  }
+
+  // ============================================================
+  // UI
+  // ============================================================
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFFF7F8FA),
-      body: SafeArea(
-        child: CustomScrollView(
-          slivers: [
-            SliverToBoxAdapter(
-              child: Padding(
-                padding: const EdgeInsets.fromLTRB(
-                  20,
-                  22,
-                  20,
-                  0,
-                ),
-                child: _buildHeader(),
-              ),
-            ),
-
-            SliverToBoxAdapter(
-              child: Padding(
-                padding: const EdgeInsets.fromLTRB(
-                  20,
-                  24,
-                  20,
-                  0,
-                ),
-                child: _buildLinkSection(),
-              ),
-            ),
-
-            if (_errorMessage != null)
-              SliverToBoxAdapter(
-                child: Padding(
-                  padding: const EdgeInsets.fromLTRB(
-                    20,
-                    14,
-                    20,
-                    0,
-                  ),
-                  child: _buildErrorCard(),
-                ),
-              ),
-
-            if (_media != null)
-              SliverToBoxAdapter(
-                child: Padding(
-                  padding: const EdgeInsets.fromLTRB(
-                    20,
-                    18,
-                    20,
-                    0,
-                  ),
-                  child: _buildMediaCard(),
-                ),
-              ),
-
-            if (_isDownloading || _isPaused)
-              SliverToBoxAdapter(
-                child: Padding(
-                  padding: const EdgeInsets.fromLTRB(
-                    20,
-                    18,
-                    20,
-                    0,
-                  ),
-                  child: _buildDownloadStatus(),
-                ),
-              ),
-
-            if (_downloadedFileName != null)
-              SliverToBoxAdapter(
-                child: Padding(
-                  padding: const EdgeInsets.fromLTRB(
-                    20,
-                    18,
-                    20,
-                    0,
-                  ),
-                  child: _buildCompletedCard(),
-                ),
-              ),
-
-            SliverToBoxAdapter(
-              child: Padding(
-                padding: const EdgeInsets.fromLTRB(
-                  20,
-                  24,
-                  20,
-                  30,
-                ),
-                child: _buildPremiumCard(),
-              ),
-            ),
-          ],
+      backgroundColor: const Color(0xFFF5F7FA),
+      appBar: AppBar(
+        backgroundColor: Colors.white,
+        elevation: 0,
+        centerTitle: false,
+        title: const Text(
+          'MP34 Downloader',
+          style: TextStyle(
+            fontWeight: FontWeight.bold,
+            color: Colors.black87,
+          ),
         ),
       ),
-    );
-  }
-
-  // ==========================================================
-  // HEADER
-  // ==========================================================
-
-  Widget _buildHeader() {
-    return Row(
-      children: [
-        Expanded(
+      body: SafeArea(
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.all(18),
           child: Column(
-            crossAxisAlignment:
-                CrossAxisAlignment.start,
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text(
-                'Hello, ${widget.username}',
-                style: const TextStyle(
-                  fontSize: 15,
-                  color: Colors.black54,
-                ),
-              ),
-              const SizedBox(height: 4),
               const Text(
-                'Download media',
+                'Download your media',
                 style: TextStyle(
-                  fontSize: 27,
+                  fontSize: 25,
                   fontWeight: FontWeight.bold,
                 ),
               ),
+
+              const SizedBox(height: 6),
+
+              const Text(
+                'Paste a video or media link below to get started.',
+                style: TextStyle(
+                  fontSize: 14,
+                  color: Colors.black54,
+                ),
+              ),
+
+              const SizedBox(height: 22),
+
+              // ------------------------------------------------
+              // URL FIELD
+              // ------------------------------------------------
+
+              Container(
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(14),
+                  boxShadow: [
+                    BoxShadow(
+                      blurRadius: 10,
+                      spreadRadius: 1,
+                      color: Colors.black.withOpacity(0.04),
+                    ),
+                  ],
+                ),
+                child: TextField(
+                  controller: _urlController,
+                  keyboardType: TextInputType.url,
+                  decoration: InputDecoration(
+                    hintText: 'Paste media URL',
+                    prefixIcon: const Icon(
+                      Icons.link,
+                    ),
+                    suffixIcon: Padding(
+                      padding: const EdgeInsets.all(6),
+                      child: ElevatedButton(
+                        onPressed:
+                            _isAnalyzing || _isDownloading
+                                ? null
+                                : _analyzeMedia,
+                        style: ElevatedButton.styleFrom(
+                          elevation: 0,
+                          shape: RoundedRectangleBorder(
+                            borderRadius:
+                                BorderRadius.circular(10),
+                          ),
+                        ),
+                        child: _isAnalyzing
+                            ? const SizedBox(
+                                width: 20,
+                                height: 20,
+                                child:
+                                    CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                ),
+                              )
+                            : const Text('Analyze'),
+                      ),
+                    ),
+                    border: InputBorder.none,
+                    contentPadding:
+                        const EdgeInsets.symmetric(
+                      horizontal: 16,
+                      vertical: 17,
+                    ),
+                  ),
+                ),
+              ),
+
+              const SizedBox(height: 16),
+
+              // ------------------------------------------------
+              // ERROR
+              // ------------------------------------------------
+
+              if (_errorMessage != null)
+                Container(
+                  width: double.infinity,
+                  margin:
+                      const EdgeInsets.only(bottom: 16),
+                  padding: const EdgeInsets.all(14),
+                  decoration: BoxDecoration(
+                    color: Colors.red.shade50,
+                    borderRadius:
+                        BorderRadius.circular(12),
+                    border: Border.all(
+                      color: Colors.red.shade100,
+                    ),
+                  ),
+                  child: Row(
+                    crossAxisAlignment:
+                        CrossAxisAlignment.start,
+                    children: [
+                      Icon(
+                        Icons.error_outline,
+                        color: Colors.red.shade700,
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Text(
+                          _errorMessage!,
+                          style: TextStyle(
+                            color: Colors.red.shade800,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+
+              // ------------------------------------------------
+              // MEDIA CARD
+              // ------------------------------------------------
+
+              if (_media != null)
+                _buildMediaCard(),
+
+              // ------------------------------------------------
+              // DOWNLOAD PROGRESS
+              // ------------------------------------------------
+
+              if (_isDownloading || _isPaused)
+                _buildProgressCard(),
+
+              // ------------------------------------------------
+              // COMPLETE
+              // ------------------------------------------------
+
+              if (_downloadedFileName != null)
+                _buildCompleteCard(),
             ],
           ),
         ),
-        Container(
-          width: 44,
-          height: 44,
-          decoration: BoxDecoration(
-            color: Colors.black,
-            borderRadius: BorderRadius.circular(14),
-          ),
-          child: const Icon(
-            Icons.download_rounded,
-            color: Colors.white,
-          ),
-        ),
-      ],
-    );
-  }
-
-  // ==========================================================
-  // LINK SECTION
-  // ==========================================================
-
-  Widget _buildLinkSection() {
-    return Column(
-      crossAxisAlignment:
-          CrossAxisAlignment.start,
-      children: [
-        const Text(
-          'Paste media link',
-          style: TextStyle(
-            fontSize: 17,
-            fontWeight: FontWeight.w700,
-          ),
-        ),
-
-        const SizedBox(height: 10),
-
-        Container(
-          decoration: BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.circular(16),
-            border: Border.all(
-              color: const Color(0xFFE4E6EA),
-            ),
-          ),
-          child: TextField(
-            controller: _urlController,
-            keyboardType: TextInputType.url,
-            textInputAction: TextInputAction.done,
-            decoration: const InputDecoration(
-              hintText: 'https://...',
-              prefixIcon: Icon(
-                Icons.link_rounded,
-              ),
-              border: InputBorder.none,
-              contentPadding: EdgeInsets.symmetric(
-                horizontal: 16,
-                vertical: 16,
-              ),
-            ),
-            onSubmitted: (_) {
-              _analyzeMedia();
-            },
-          ),
-        ),
-
-        const SizedBox(height: 12),
-
-        // IMPORTANT:
-        // Analyze button is BELOW the TextField.
-        SizedBox(
-          width: double.infinity,
-          height: 52,
-          child: FilledButton.icon(
-            onPressed:
-                _isAnalyzing || _isDownloading
-                    ? null
-                    : _analyzeMedia,
-            icon: Icon(
-              _isAnalyzing
-                  ? Icons.hourglass_top_rounded
-                  : Icons.search_rounded,
-            ),
-            label: Text(
-              _isAnalyzing
-                  ? 'Analyzing...'
-                  : 'Analyze',
-              style: const TextStyle(
-                fontWeight: FontWeight.w700,
-              ),
-            ),
-          ),
-        ),
-      ],
-    );
-  }
-
-  // ==========================================================
-  // ERROR
-  // ==========================================================
-
-  Widget _buildErrorCard() {
-    return Container(
-      padding: const EdgeInsets.all(15),
-      decoration: BoxDecoration(
-        color: Colors.red.withOpacity(0.07),
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(
-          color: Colors.red.withOpacity(0.2),
-        ),
-      ),
-      child: Row(
-        crossAxisAlignment:
-            CrossAxisAlignment.start,
-        children: [
-          const Icon(
-            Icons.error_outline_rounded,
-            color: Colors.red,
-          ),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Text(
-              _errorMessage!,
-              style: const TextStyle(
-                color: Colors.red,
-              ),
-            ),
-          ),
-        ],
       ),
     );
   }
 
-  // ==========================================================
+  // ============================================================
   // MEDIA CARD
-  // ==========================================================
+  // ============================================================
 
   Widget _buildMediaCard() {
     final media = _media!;
 
     return Container(
+      width: double.infinity,
+      margin: const EdgeInsets.only(bottom: 16),
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
         color: Colors.white,
-        borderRadius: BorderRadius.circular(18),
-        border: Border.all(
-          color: const Color(0xFFE6E7EA),
-        ),
+        borderRadius: BorderRadius.circular(16),
+        boxShadow: [
+          BoxShadow(
+            blurRadius: 12,
+            spreadRadius: 1,
+            color: Colors.black.withOpacity(0.04),
+          ),
+        ],
       ),
       child: Column(
         crossAxisAlignment:
@@ -599,7 +564,7 @@ class _HomepageState extends State<Homepage> {
           if (media.thumbnail.isNotEmpty)
             ClipRRect(
               borderRadius:
-                  BorderRadius.circular(14),
+                  BorderRadius.circular(12),
               child: AspectRatio(
                 aspectRatio: 16 / 9,
                 child: Image.network(
@@ -608,12 +573,13 @@ class _HomepageState extends State<Homepage> {
                   errorBuilder:
                       (_, __, ___) {
                     return Container(
-                      color:
-                          const Color(0xFFF0F1F3),
-                      child: const Icon(
-                        Icons.video_library_outlined,
-                        size: 42,
-                        color: Colors.black38,
+                      color: Colors.grey.shade200,
+                      child: const Center(
+                        child: Icon(
+                          Icons.image_not_supported,
+                          size: 45,
+                          color: Colors.grey,
+                        ),
                       ),
                     );
                   },
@@ -623,115 +589,109 @@ class _HomepageState extends State<Homepage> {
 
           const SizedBox(height: 14),
 
-          Text(
-            media.title,
-            maxLines: 2,
-            overflow: TextOverflow.ellipsis,
-            style: const TextStyle(
-              fontSize: 17,
-              fontWeight: FontWeight.w700,
-            ),
+          Row(
+            children: [
+              Container(
+                width: 42,
+                height: 42,
+                decoration: BoxDecoration(
+                  color: Colors.blue.shade50,
+                  borderRadius:
+                      BorderRadius.circular(12),
+                ),
+                child: Icon(
+                  _platformIcon(media.platform),
+                  color: Colors.blue.shade700,
+                ),
+              ),
+
+              const SizedBox(width: 12),
+
+              Expanded(
+                child: Column(
+                  crossAxisAlignment:
+                      CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      media.title,
+                      maxLines: 2,
+                      overflow:
+                          TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      media.platform,
+                      style: TextStyle(
+                        color: Colors.grey.shade600,
+                        fontSize: 13,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
           ),
 
-          const SizedBox(height: 6),
+          const SizedBox(height: 16),
 
-          Text(
-            media.platform,
-            style: const TextStyle(
-              color: Colors.black54,
-            ),
-          ),
-
-          const SizedBox(height: 14),
-
-          if (!_isDownloading && !_isPaused)
+          if (!_isDownloading &&
+              !_isPaused &&
+              _downloadedFileName == null)
             SizedBox(
               width: double.infinity,
               height: 50,
-              child: FilledButton.icon(
-                onPressed: _downloadMedia,
+              child: ElevatedButton.icon(
+                onPressed: _startDownload,
                 icon: const Icon(
                   Icons.download_rounded,
                 ),
                 label: const Text(
                   'Download',
                   style: TextStyle(
-                    fontWeight: FontWeight.w700,
+                    fontSize: 16,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+                style: ElevatedButton.styleFrom(
+                  shape: RoundedRectangleBorder(
+                    borderRadius:
+                        BorderRadius.circular(12),
                   ),
                 ),
               ),
             ),
-
-          if (_isDownloading || _isPaused)
-            _buildDownloadButtons(),
         ],
       ),
     );
   }
 
-  // ==========================================================
-  // DOWNLOAD BUTTONS
-  // ==========================================================
+  // ============================================================
+  // PROGRESS CARD
+  // ============================================================
 
-  Widget _buildDownloadButtons() {
-    return Row(
-      children: [
-        Expanded(
-          child: OutlinedButton.icon(
-            onPressed:
-                _isPaused
-                    ? _resumeDownload
-                    : _pauseDownload,
-            icon: Icon(
-              _isPaused
-                  ? Icons.play_arrow_rounded
-                  : Icons.pause_rounded,
-            ),
-            label: Text(
-              _isPaused
-                  ? 'Resume'
-                  : 'Pause',
-            ),
-          ),
-        ),
-
-        const SizedBox(width: 10),
-
-        Expanded(
-          child: OutlinedButton.icon(
-            onPressed: _cancelDownload,
-            style: OutlinedButton.styleFrom(
-              foregroundColor: Colors.red,
-            ),
-            icon: const Icon(
-              Icons.close_rounded,
-            ),
-            label: const Text(
-              'Cancel',
-            ),
-          ),
-        ),
-      ],
-    );
-  }
-
-  // ==========================================================
-  // DOWNLOAD STATUS
-  // ==========================================================
-
-  Widget _buildDownloadStatus() {
-    final percentage =
-        (_downloadProgress * 100)
-            .round();
+  Widget _buildProgressCard() {
+    final percent =
+        (_downloadProgress * 100).round();
 
     return Container(
-      padding: const EdgeInsets.all(17),
+      width: double.infinity,
+      margin: const EdgeInsets.only(bottom: 16),
+      padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
         color: Colors.white,
-        borderRadius: BorderRadius.circular(18),
-        border: Border.all(
-          color: const Color(0xFFE6E7EA),
-        ),
+        borderRadius:
+            BorderRadius.circular(16),
+        boxShadow: [
+          BoxShadow(
+            blurRadius: 12,
+            spreadRadius: 1,
+            color: Colors.black.withOpacity(0.04),
+          ),
+        ],
       ),
       child: Column(
         crossAxisAlignment:
@@ -740,9 +700,10 @@ class _HomepageState extends State<Homepage> {
           Row(
             children: [
               const Icon(
-                Icons.downloading_rounded,
+                Icons.download_rounded,
+                color: Colors.blue,
               ),
-              const SizedBox(width: 9),
+              const SizedBox(width: 10),
               Expanded(
                 child: Text(
                   _isPaused
@@ -750,12 +711,12 @@ class _HomepageState extends State<Homepage> {
                       : 'Downloading...',
                   style: const TextStyle(
                     fontSize: 16,
-                    fontWeight: FontWeight.w700,
+                    fontWeight: FontWeight.bold,
                   ),
                 ),
               ),
               Text(
-                '$percentage%',
+                '$percent%',
                 style: const TextStyle(
                   fontWeight: FontWeight.bold,
                 ),
@@ -763,139 +724,193 @@ class _HomepageState extends State<Homepage> {
             ],
           ),
 
-          const SizedBox(height: 13),
+          const SizedBox(height: 14),
 
           ClipRRect(
             borderRadius:
-                BorderRadius.circular(10),
+                BorderRadius.circular(20),
             child: LinearProgressIndicator(
-              value: _downloadProgress,
+              value: _totalBytes > 0
+                  ? _downloadProgress
+                  : null,
               minHeight: 8,
             ),
           ),
 
-          const SizedBox(height: 14),
+          const SizedBox(height: 10),
 
-          _buildDownloadButtons(),
+          if (_totalBytes > 0)
+            Text(
+              '${_formatBytes(_receivedBytes)} / ${_formatBytes(_totalBytes)}',
+              style: TextStyle(
+                color: Colors.grey.shade600,
+                fontSize: 13,
+              ),
+            )
+          else
+            Text(
+              _formatBytes(_receivedBytes),
+              style: TextStyle(
+                color: Colors.grey.shade600,
+                fontSize: 13,
+              ),
+            ),
+
+          const SizedBox(height: 16),
+
+          // ----------------------------------------------------
+          // ONLY ONE PAUSE/RESUME + ONE CANCEL
+          // ----------------------------------------------------
+
+          Row(
+            children: [
+              Expanded(
+                child: OutlinedButton.icon(
+                  onPressed: _isPaused
+                      ? _resumeDownload
+                      : _pauseDownload,
+                  icon: Icon(
+                    _isPaused
+                        ? Icons.play_arrow
+                        : Icons.pause,
+                  ),
+                  label: Text(
+                    _isPaused
+                        ? 'Resume'
+                        : 'Pause',
+                  ),
+                  style: OutlinedButton.styleFrom(
+                    minimumSize:
+                        const Size.fromHeight(46),
+                    shape: RoundedRectangleBorder(
+                      borderRadius:
+                          BorderRadius.circular(10),
+                    ),
+                  ),
+                ),
+              ),
+
+              const SizedBox(width: 10),
+
+              Expanded(
+                child: OutlinedButton.icon(
+                  onPressed: _isDownloading
+                      ? _cancelDownload
+                      : null,
+                  icon: const Icon(
+                    Icons.close,
+                  ),
+                  label: const Text(
+                    'Cancel',
+                  ),
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: Colors.red,
+                    side: const BorderSide(
+                      color: Colors.red,
+                    ),
+                    minimumSize:
+                        const Size.fromHeight(46),
+                    shape: RoundedRectangleBorder(
+                      borderRadius:
+                          BorderRadius.circular(10),
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
         ],
       ),
     );
   }
 
-  // ==========================================================
-  // COMPLETED
-  // ==========================================================
+  // ============================================================
+  // COMPLETE CARD
+  // ============================================================
 
-  Widget _buildCompletedCard() {
+  Widget _buildCompleteCard() {
     return Container(
-      padding: const EdgeInsets.all(17),
+      width: double.infinity,
+      padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: Colors.green.withOpacity(0.07),
-        borderRadius: BorderRadius.circular(18),
+        color: Colors.green.shade50,
+        borderRadius:
+            BorderRadius.circular(16),
         border: Border.all(
-          color: Colors.green.withOpacity(0.2),
+          color: Colors.green.shade100,
         ),
       ),
-      child: Row(
+      child: Column(
         crossAxisAlignment:
             CrossAxisAlignment.start,
         children: [
-          const Icon(
-            Icons.check_circle_rounded,
-            color: Colors.green,
-            size: 30,
-          ),
-
-          const SizedBox(width: 12),
-
-          Expanded(
-            child: Column(
-              crossAxisAlignment:
-                  CrossAxisAlignment.start,
-              children: [
-                const Text(
+          Row(
+            children: [
+              Container(
+                width: 42,
+                height: 42,
+                decoration: BoxDecoration(
+                  color: Colors.green.shade100,
+                  shape: BoxShape.circle,
+                ),
+                child: Icon(
+                  Icons.check,
+                  color: Colors.green.shade700,
+                ),
+              ),
+              const SizedBox(width: 12),
+              const Expanded(
+                child: Text(
                   'Download complete',
                   style: TextStyle(
-                    fontWeight: FontWeight.bold,
-                    fontSize: 16,
-                  ),
-                ),
-
-                const SizedBox(height: 5),
-
-                Text(
-                  _downloadedFileName ??
-                      'Media file',
-                  maxLines: 2,
-                  overflow:
-                      TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    color: Colors.black87,
-                  ),
-                ),
-
-                if (_downloadLocation != null)
-                  Padding(
-                    padding:
-                        const EdgeInsets.only(
-                      top: 5,
-                    ),
-                    child: Text(
-                      _downloadLocation!,
-                      style: const TextStyle(
-                        color: Colors.black54,
-                        fontSize: 13,
-                      ),
-                    ),
-                  ),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  // ==========================================================
-  // PREMIUM
-  // ==========================================================
-
-  Widget _buildPremiumCard() {
-    return Container(
-      padding: const EdgeInsets.all(20),
-      decoration: BoxDecoration(
-        color: Colors.black,
-        borderRadius: BorderRadius.circular(20),
-      ),
-      child: const Row(
-        children: [
-          Icon(
-            Icons.workspace_premium_rounded,
-            color: Colors.amber,
-            size: 35,
-          ),
-          SizedBox(width: 14),
-          Expanded(
-            child: Column(
-              crossAxisAlignment:
-                  CrossAxisAlignment.start,
-              children: [
-                Text(
-                  'MP34 Premium',
-                  style: TextStyle(
-                    color: Colors.white,
                     fontSize: 17,
                     fontWeight: FontWeight.bold,
                   ),
                 ),
-                SizedBox(height: 5),
-                Text(
-                  'Faster downloads and more features.',
-                  style: TextStyle(
-                    color: Colors.white70,
-                  ),
+              ),
+            ],
+          ),
+
+          const SizedBox(height: 14),
+
+          Text(
+            _downloadedFileName ?? '',
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+
+          const SizedBox(height: 6),
+
+          Text(
+            _downloadLocation ?? '',
+            style: TextStyle(
+              color: Colors.grey.shade700,
+              fontSize: 13,
+            ),
+          ),
+
+          const SizedBox(height: 16),
+
+          SizedBox(
+            width: double.infinity,
+            height: 46,
+            child: OutlinedButton.icon(
+              onPressed: _clearMedia,
+              icon: const Icon(
+                Icons.add,
+              ),
+              label: const Text(
+                'Download Another',
+              ),
+              style: OutlinedButton.styleFrom(
+                shape: RoundedRectangleBorder(
+                  borderRadius:
+                      BorderRadius.circular(10),
                 ),
-              ],
+              ),
             ),
           ),
         ],
