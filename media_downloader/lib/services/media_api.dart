@@ -7,7 +7,6 @@ import 'package:path_provider/path_provider.dart';
 
 import '../models/analyser.dart';
 
-
 class MediaApi {
   MediaApi._();
 
@@ -25,84 +24,59 @@ class MediaApi {
     ),
   );
 
-  final FlutterLocalNotificationsPlugin
-      _notifications =
+  final FlutterLocalNotificationsPlugin _notifications =
       FlutterLocalNotificationsPlugin();
 
-
-  // ======================================================
-  // INITIALIZE NOTIFICATIONS
-  // ======================================================
+  // ============================================================
+  // NOTIFICATIONS
+  // ============================================================
 
   Future<void> initializeNotifications() async {
-
     const androidSettings =
-        AndroidInitializationSettings(
-      '@mipmap/ic_launcher',
-    );
+        AndroidInitializationSettings('@mipmap/ic_launcher');
 
     const settings = InitializationSettings(
       android: androidSettings,
     );
 
-    await _notifications.initialize(
-      settings:settings,
-    );
+    await _notifications.initialize(settings: settings);
 
-    final androidPlugin =
-        _notifications
-            .resolvePlatformSpecificImplementation<
-                AndroidFlutterLocalNotificationsPlugin>();
+    final androidPlugin = _notifications
+        .resolvePlatformSpecificImplementation<
+            AndroidFlutterLocalNotificationsPlugin>();
 
     await androidPlugin?.requestNotificationsPermission();
   }
 
+  // ============================================================
+  // ANALYZE URL
+  // ============================================================
 
-  // ======================================================
-  // ANALYZE
-  // ======================================================
-
-  Future<MediaInfo> analyze(
-    String url,
-  ) async {
-
+  Future<MediaInfo> analyze(String url) async {
     try {
-
       final response = await _dio.post(
         '/analyze',
         data: {
-          'url': url,
+          'url': url.trim(),
         },
       );
 
-      final data =
-          Map<String, dynamic>.from(
-        response.data,
-      );
+      final data = Map<String, dynamic>.from(response.data);
 
       return MediaInfo.fromJson(data);
-
     } on DioException catch (error) {
-
-      String message =
-          'Could not analyse the link.';
+      String message = 'Could not analyse the link.';
 
       if (error.response?.data is Map) {
-
         final responseData =
-            Map<String, dynamic>.from(
-          error.response!.data,
-        );
+            Map<String, dynamic>.from(error.response!.data);
 
-        final detail =
-            responseData['detail'];
+        final detail = responseData['detail'];
 
         if (detail != null) {
           message = detail.toString();
         }
-
       } else if (error.message != null) {
-
         message = error.message!;
       }
 
@@ -110,32 +84,31 @@ class MediaApi {
     }
   }
 
-
-  // ======================================================
+  // ============================================================
   // DOWNLOAD
-  // ======================================================
+  // ============================================================
 
   Future<String> download(
     MediaInfo media, {
-    required void Function(double progress)
-        onProgress,
+    required void Function(double progress) onProgress,
     CancelToken? cancelToken,
   }) async {
-
     await initializeNotifications();
 
-    final directory =
-        await getTemporaryDirectory();
+    final directory = await getTemporaryDirectory();
 
-    final safeTitle =
-        _safeFileName(media.title);
+    final safeTitle = _safeFileName(media.title);
 
-    final tempFile =
-        File(
+    final tempFile = File(
       '${directory.path}/$safeTitle.download',
     );
 
     try {
+      // --------------------------------------------------------
+      // START
+      // --------------------------------------------------------
+
+      onProgress(0.0);
 
       await _showNotification(
         id: 1001,
@@ -144,132 +117,150 @@ class MediaApi {
         progress: 0,
       );
 
-      final response =
-          await _dio.post<ResponseBody>(
-        '/download',
+      // --------------------------------------------------------
+      // REQUEST FILE FROM SERVER
+      // --------------------------------------------------------
 
+      final response = await _dio.post<ResponseBody>(
+        '/download',
         data: {
           'url': media.sourceUrl,
         },
-
         options: Options(
           responseType: ResponseType.stream,
           followRedirects: true,
-          receiveTimeout:
-              const Duration(minutes: 30),
+          receiveTimeout: const Duration(minutes: 30),
         ),
-
         cancelToken: cancelToken,
 
-        onReceiveProgress:
-            (received, total) {
-
+        onReceiveProgress: (received, total) {
           if (total <= 0) {
             return;
           }
 
-          final progress =
-              received / total;
+          final actualProgress = received / total;
 
-          onProgress(progress);
+          // Do not show 100% yet.
+          //
+          // 100% should only appear AFTER:
+          // 1. The file is written.
+          // 2. MediaStore saves it.
+          final displayProgress =
+              actualProgress >= 1.0 ? 0.99 : actualProgress;
+
+          onProgress(displayProgress);
 
           _showNotification(
             id: 1001,
             title: 'Downloading',
             body:
-                '${(progress * 100).toStringAsFixed(0)}% • ${media.title}',
+                '${(displayProgress * 100).toStringAsFixed(0)}% • ${media.title}',
             progress:
-                (progress * 100).round(),
+                (displayProgress * 100).round(),
           );
         },
       );
 
-      final responseBody =
-          response.data;
+      final responseBody = response.data;
 
       if (responseBody == null) {
-
         throw MediaApiException(
           'The server returned an empty file.',
         );
       }
 
-      // --------------------------------------------------
-      // Write server response to temporary file
-      // --------------------------------------------------
+      // --------------------------------------------------------
+      // WRITE SERVER RESPONSE TO TEMP FILE
+      // --------------------------------------------------------
 
-      final sink =
-          tempFile.openWrite();
+      await _showNotification(
+        id: 1001,
+        title: 'Downloading',
+        body: 'Receiving ${media.title}...',
+        progress: 99,
+      );
+
+      final sink = tempFile.openWrite();
 
       try {
-
-        await for (
-          final chunk
-          in responseBody.stream
-        ) {
-
+        await for (final chunk in responseBody.stream) {
           sink.add(chunk);
         }
-
       } finally {
-
         await sink.flush();
         await sink.close();
       }
 
-      if (!await tempFile.exists()) {
+      // --------------------------------------------------------
+      // CHECK TEMP FILE
+      // --------------------------------------------------------
 
+      if (!await tempFile.exists()) {
         throw MediaApiException(
-          'Downloaded file was not created.',
+          'The downloaded file was not created.',
         );
       }
 
-      final fileSize =
-          await tempFile.length();
+      final fileSize = await tempFile.length();
 
-      if (fileSize == 0) {
-
+      if (fileSize <= 0) {
         throw MediaApiException(
           'The downloaded file is empty.',
         );
       }
 
-      // --------------------------------------------------
-      // Save to Android MediaStore
-      // --------------------------------------------------
+      // --------------------------------------------------------
+      // DOWNLOAD FINISHED
+      //
+      // But we intentionally DON'T show 100% yet.
+      // --------------------------------------------------------
 
-      final savedPath =
-          await _saveToMediaStore(
+      onProgress(0.995);
+
+      await _showNotification(
+        id: 1001,
+        title: 'Saving',
+        body: 'Saving ${media.title} to your device...',
+        progress: 99,
+      );
+
+      // --------------------------------------------------------
+      // SAVE TO ANDROID MEDIA LIBRARY
+      // --------------------------------------------------------
+
+      final savedPath = await _saveToMediaStore(
         tempFile,
         media,
       );
 
-      // --------------------------------------------------
-      // Delete temporary file
-      // --------------------------------------------------
+      // --------------------------------------------------------
+      // DELETE TEMPORARY FILE
+      // --------------------------------------------------------
 
       try {
         await tempFile.delete();
-      } catch (_) {}
+      } catch (_) {
+        // Not critical if deletion fails.
+      }
 
-      // --------------------------------------------------
-      // Complete notification
-      // --------------------------------------------------
-
-      await _showCompletedNotification(
-        id: 1001,
-        title: 'Download complete',
-        body: media.title,
-      );
+      // --------------------------------------------------------
+      // NOW IT IS REALLY COMPLETE
+      // --------------------------------------------------------
 
       onProgress(1.0);
 
-      return savedPath;
+      await _showCompletedNotification(
+        title: 'Download complete',
+        body: '${media.title} saved to your device',
+      );
 
+      return savedPath;
     } on DioException catch (error) {
+      // --------------------------------------------------------
+      // CANCELLED
+      // --------------------------------------------------------
 
       if (CancelToken.isCancel(error)) {
-
         await _showNotification(
           id: 1001,
           title: 'Download cancelled',
@@ -280,39 +271,44 @@ class MediaApi {
         throw DownloadCancelledException();
       }
 
-      await _showNotification(
-        id: 1001,
-        title: 'Download failed',
-        body: media.title,
-        progress: 0,
-      );
+      // --------------------------------------------------------
+      // DIO ERROR
+      // --------------------------------------------------------
 
-      String message =
-          'Download failed.';
+      String message = 'Download failed.';
 
       if (error.response?.data is Map) {
-
         final data =
             Map<String, dynamic>.from(
           error.response!.data,
         );
 
-        final detail =
-            data['detail'];
+        final detail = data['detail'];
 
         if (detail != null) {
           message = detail.toString();
         }
+      } else if (error.message != null) {
+        message = error.message!;
       }
-
-      throw MediaApiException(message);
-
-    } catch (error) {
 
       await _showNotification(
         id: 1001,
         title: 'Download failed',
-        body: media.title,
+        body: message,
+        progress: 0,
+      );
+
+      throw MediaApiException(message);
+    } catch (error) {
+      // --------------------------------------------------------
+      // OTHER ERROR
+      // --------------------------------------------------------
+
+      await _showNotification(
+        id: 1001,
+        title: 'Download failed',
+        body: error.toString(),
         progress: 0,
       );
 
@@ -321,74 +317,81 @@ class MediaApi {
       }
 
       throw MediaApiException(
-        error.toString(),
+        'Could not save the downloaded file: $error',
       );
     }
   }
 
-
-  // ======================================================
+  // ============================================================
   // SAVE TO MEDIASTORE
-  // ======================================================
+  // ============================================================
 
   Future<String> _saveToMediaStore(
     File file,
     MediaInfo media,
   ) async {
+    final mediaStore = MediaStore();
 
-    final mediaStore =
-        MediaStore();
-
-    final extension =
-        _getExtension(
+    final extension = _getExtension(
       media.title,
       file.path,
     );
 
-    final isAudio =
-        _isAudioExtension(extension);
+    final isAudio = _isAudioExtension(extension);
 
     final fileName =
         '${_safeFileName(media.title)}.$extension';
 
     SaveInfo? result;
 
-    if (isAudio) {
+    try {
+      if (isAudio) {
+        // ------------------------------------------------------
+        // AUDIO → MUSIC
+        // ------------------------------------------------------
 
-      result = await mediaStore.saveFile(
-        tempFilePath: file.path,
-        dirType: DirType.audio,
-        dirName: DirName.music,
-        relativePath:
-            'MP34 Downloader',
-      );
+        result = await mediaStore.saveFile(
+          tempFilePath: file.path,
+          dirType: DirType.audio,
+          dirName: DirName.music,
+          relativePath: 'MP34 Downloader',
+        );
+      } else {
+        // ------------------------------------------------------
+        // VIDEO → MOVIES
+        // ------------------------------------------------------
 
-    } else {
-
-      result = await mediaStore.saveFile(
-        tempFilePath: file.path,
-        dirType: DirType.video,
-        dirName: DirName.movies,
-        relativePath:
-            'MP34 Downloader',
+        result = await mediaStore.saveFile(
+          tempFilePath: file.path,
+          dirType: DirType.video,
+          dirName: DirName.movies,
+          relativePath: 'MP34 Downloader',
+        );
+      }
+    } catch (error) {
+      throw MediaApiException(
+        'MediaStore error: $error',
       );
     }
 
-    if (result == null ||
-        !result.isSuccessful) {
-
+    if (result == null) {
       throw MediaApiException(
-        'Could not save the file to your device.',
+        'MediaStore returned no result.',
+      );
+    }
+
+    if (!result.isSuccessful) {
+      throw MediaApiException(
+        'Android could not save the file to your media library.',
       );
     }
 
     return fileName;
   }
 
-
-  // ======================================================
-  // NOTIFICATION
-  // ======================================================
+  // ============================================================
+  // DOWNLOAD NOTIFICATION
+  // ============================================================
 
   Future<void> _showNotification({
     required int id,
@@ -396,7 +399,6 @@ class MediaApi {
     required String body,
     required int progress,
   }) async {
-
     final androidDetails =
         AndroidNotificationDetails(
       'downloads',
@@ -411,8 +413,7 @@ class MediaApi {
       progress: progress,
     );
 
-    final details =
-        NotificationDetails(
+    final details = NotificationDetails(
       android: androidDetails,
     );
 
@@ -424,17 +425,14 @@ class MediaApi {
     );
   }
 
-
-  // ======================================================
-  // COMPLETE NOTIFICATION
-  // ======================================================
+  // ============================================================
+  // COMPLETED NOTIFICATION
+  // ============================================================
 
   Future<void> _showCompletedNotification({
-    required int id,
     required String title,
     required String body,
   }) async {
-
     const androidDetails =
         AndroidNotificationDetails(
       'downloads_complete',
@@ -445,29 +443,26 @@ class MediaApi {
       priority: Priority.defaultPriority,
     );
 
-    const details =
-        NotificationDetails(
+    const details = NotificationDetails(
       android: androidDetails,
     );
 
     await _notifications.show(
-      id: id,
+      id: 1001,
       title: title,
       body: body,
       notificationDetails: details,
     );
   }
 
-
-  // ======================================================
+  // ============================================================
   // FILE EXTENSION
-  // ======================================================
+  // ============================================================
 
   String _getExtension(
     String title,
     String path,
   ) {
-
     final pathExtension =
         path.split('.').last.toLowerCase();
 
@@ -485,24 +480,20 @@ class MediaApi {
       'flac',
     };
 
-    if (knownExtensions.contains(
-      pathExtension,
-    )) {
+    if (knownExtensions.contains(pathExtension)) {
       return pathExtension;
     }
 
     return 'mp4';
   }
 
-
-  // ======================================================
+  // ============================================================
   // AUDIO CHECK
-  // ======================================================
+  // ============================================================
 
   bool _isAudioExtension(
     String extension,
   ) {
-
     return {
       'mp3',
       'm4a',
@@ -515,18 +506,14 @@ class MediaApi {
     );
   }
 
-
-  // ======================================================
+  // ============================================================
   // MIME TYPE
-  // ======================================================
+  // ============================================================
 
   String _mimeType(
     String extension,
   ) {
-
-    switch (
-        extension.toLowerCase()) {
-
+    switch (extension.toLowerCase()) {
       case 'mp3':
         return 'audio/mpeg';
 
@@ -563,17 +550,14 @@ class MediaApi {
     }
   }
 
-
-  // ======================================================
+  // ============================================================
   // SAFE FILE NAME
-  // ======================================================
+  // ============================================================
 
   String _safeFileName(
     String value,
   ) {
-
-    var result =
-        value.trim();
+    var result = value.trim();
 
     if (result.isEmpty) {
       result = 'media';
@@ -597,30 +581,23 @@ class MediaApi {
   }
 }
 
-
-// ========================================================
+// ================================================================
 // EXCEPTIONS
-// ========================================================
+// ================================================================
 
 class MediaApiException
     implements Exception {
-
   final String message;
 
   MediaApiException(this.message);
 
   @override
-  String toString() {
-    return message;
-  }
+  String toString() => message;
 }
-
 
 class DownloadCancelledException
     implements Exception {
-
   @override
-  String toString() {
-    return 'Download cancelled.';
-  }
+  String toString() =>
+      'Download cancelled.';
 }

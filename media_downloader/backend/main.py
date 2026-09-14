@@ -1,6 +1,8 @@
 from pathlib import Path
 from urllib.parse import urlparse
 import tempfile
+import shutil
+import os
 
 from fastapi import FastAPI, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
@@ -12,18 +14,12 @@ except ImportError:
     yt_dlp = None
 
 
-# =========================================================
-# APP
-# =========================================================
-
-app = FastAPI(
-    title="MP34 Downloader API"
-)
+app = FastAPI(title="MP34 Downloader API")
 
 
-# =========================================================
+# ============================================================
 # CORS
-# =========================================================
+# ============================================================
 
 app.add_middleware(
     CORSMiddleware,
@@ -34,12 +30,11 @@ app.add_middleware(
 )
 
 
-# =========================================================
+# ============================================================
 # URL VALIDATION
-# =========================================================
+# ============================================================
 
 def validate_url(value: str) -> str:
-
     value = value.strip()
 
     parsed = urlparse(value)
@@ -59,12 +54,11 @@ def validate_url(value: str) -> str:
     return value
 
 
-# =========================================================
+# ============================================================
 # PLATFORM
-# =========================================================
+# ============================================================
 
 def platform_for(url: str) -> str:
-
     host = urlparse(url).netloc.lower()
 
     platforms = [
@@ -79,35 +73,32 @@ def platform_for(url: str) -> str:
     ]
 
     for domain, name in platforms:
-
         if domain in host:
             return name
 
     return "Other"
 
 
-# =========================================================
-# ROOT
-# =========================================================
+# ============================================================
+# HOME
+# ============================================================
 
 @app.get("/")
 async def home():
-
     return {
         "status": "online",
         "service": "MP34 Downloader API"
     }
 
 
-# =========================================================
+# ============================================================
 # ANALYZE
-# =========================================================
+# ============================================================
 
 @app.post("/analyze")
 async def analyze_link(data: dict):
 
     if not isinstance(data, dict):
-
         raise HTTPException(
             status_code=422,
             detail="Request body must be JSON."
@@ -116,20 +107,16 @@ async def analyze_link(data: dict):
     raw_url = data.get("url")
 
     if not raw_url:
-
         raise HTTPException(
             status_code=422,
             detail="Please provide a media URL."
         )
 
-    url = validate_url(
-        str(raw_url)
-    )
+    url = validate_url(str(raw_url))
 
     platform = platform_for(url)
 
     if yt_dlp is None:
-
         raise HTTPException(
             status_code=503,
             detail="yt-dlp is not installed."
@@ -144,9 +131,7 @@ async def analyze_link(data: dict):
             "noplaylist": True,
         }
 
-        with yt_dlp.YoutubeDL(
-            options
-        ) as downloader:
+        with yt_dlp.YoutubeDL(options) as downloader:
 
             info = downloader.extract_info(
                 url,
@@ -154,28 +139,15 @@ async def analyze_link(data: dict):
             )
 
         if not info:
-
             raise HTTPException(
                 status_code=422,
                 detail="Could not find media information."
             )
 
         return {
-            "title": (
-                info.get("title")
-                or "Untitled media"
-            ),
-
-            "thumbnail": (
-                info.get("thumbnail")
-                or ""
-            ),
-
-            "platform": (
-                info.get("extractor_key")
-                or platform
-            ),
-
+            "title": info.get("title") or "Untitled media",
+            "thumbnail": info.get("thumbnail") or "",
+            "platform": info.get("extractor_key") or platform,
             "source_url": url,
         }
 
@@ -186,25 +158,21 @@ async def analyze_link(data: dict):
 
         raise HTTPException(
             status_code=422,
-            detail=(
-                f"Could not analyse this link: "
-                f"{error}"
-            )
+            detail=f"Could not analyse this link: {error}"
         ) from error
 
 
-# =========================================================
+# ============================================================
 # DOWNLOAD
-# =========================================================
+# ============================================================
 
 @app.post("/download")
 async def download_link(
     data: dict,
-    background_tasks: BackgroundTasks,
+    background_tasks: BackgroundTasks
 ):
 
     if not isinstance(data, dict):
-
         raise HTTPException(
             status_code=422,
             detail="Request body must be JSON."
@@ -213,165 +181,232 @@ async def download_link(
     raw_url = data.get("url")
 
     if not raw_url:
-
         raise HTTPException(
             status_code=422,
             detail="Please provide a media URL."
         )
 
-    url = validate_url(
-        str(raw_url)
-    )
+    url = validate_url(str(raw_url))
 
     if yt_dlp is None:
-
         raise HTTPException(
             status_code=503,
             detail="yt-dlp is not installed."
         )
 
-    # -----------------------------------------------------
+    # --------------------------------------------------------
     # CREATE TEMP DIRECTORY
-    # -----------------------------------------------------
+    # --------------------------------------------------------
 
     temp_dir = Path(
         tempfile.mkdtemp(
-            prefix="media_download_"
+            prefix="mp34_download_"
         )
     )
 
     try:
 
+        # ----------------------------------------------------
+        # IMPORTANT:
+        # Use a predictable output filename.
+        # ----------------------------------------------------
+
         output_template = str(
-            temp_dir /
-            "%(title).150s.%(ext)s"
+            temp_dir / "download.%(ext)s"
         )
 
         options = {
-
-            "quiet": True,
-
-            "no_warnings": True,
+            "quiet": False,
+            "no_warnings": False,
 
             "noplaylist": True,
 
-            # Let yt-dlp select the best available media.
+            # Prefer a single downloadable file.
             "format": "best",
 
             "outtmpl": output_template,
 
-            # Do not keep partial files after an error.
+            # Continue interrupted downloads when possible.
             "continuedl": True,
 
-            # Allow yt-dlp to merge streams if necessary.
+            # Try to produce MP4 when merging is required.
             "merge_output_format": "mp4",
+
+            # Do not leave partial files behind.
+            "nopart": False,
         }
 
-        # -------------------------------------------------
-        # DOWNLOAD
-        # -------------------------------------------------
+        print("=" * 60)
+        print("MP34 DOWNLOAD START")
+        print("URL:", url)
+        print("TEMP DIRECTORY:", temp_dir)
+        print("=" * 60)
 
-        with yt_dlp.YoutubeDL(
-            options
-        ) as downloader:
+        # ----------------------------------------------------
+        # DOWNLOAD
+        # ----------------------------------------------------
+
+        with yt_dlp.YoutubeDL(options) as downloader:
 
             info = downloader.extract_info(
                 url,
                 download=True
             )
 
-        # -------------------------------------------------
-        # FIND ACTUAL CREATED FILE
-        # -------------------------------------------------
+        print("=" * 60)
+        print("YT-DLP FINISHED")
+        print("TITLE:", info.get("title") if info else "unknown")
+        print("=" * 60)
 
-        created_files = []
+        # ----------------------------------------------------
+        # FIND THE ACTUAL FILE
+        # ----------------------------------------------------
+
+        files = []
 
         for file in temp_dir.rglob("*"):
 
             if not file.is_file():
                 continue
 
-            # Ignore yt-dlp temporary/partial files.
+            # Ignore partial downloads.
             if file.name.endswith(".part"):
                 continue
 
+            # Ignore yt-dlp metadata.
             if file.name.endswith(".ytdl"):
                 continue
 
-            created_files.append(file)
+            # Ignore zero-byte files.
+            try:
+                if file.stat().st_size <= 0:
+                    continue
+            except Exception:
+                continue
 
-        # -------------------------------------------------
+            files.append(file)
+
+        # ----------------------------------------------------
+        # DEBUG INFORMATION
+        # ----------------------------------------------------
+
+        print("FILES CREATED:")
+
+        for file in files:
+            try:
+                print(
+                    " -",
+                    file.name,
+                    file.stat().st_size,
+                    "bytes"
+                )
+            except Exception:
+                print(" -", file.name)
+
+        # ----------------------------------------------------
         # NO FILE
-        # -------------------------------------------------
+        # ----------------------------------------------------
 
-        if not created_files:
+        if not files:
+
+            # Show EVERYTHING that exists in the directory.
+            all_items = []
+
+            for item in temp_dir.rglob("*"):
+                all_items.append(str(item))
+
+            print("NOTHING USABLE WAS CREATED.")
+            print("DIRECTORY CONTENT:")
+            print(all_items)
 
             raise HTTPException(
                 status_code=500,
                 detail=(
-                    "yt-dlp completed but did not create "
-                    "a media file. The source may provide "
-                    "only a streaming format or require "
-                    "additional processing."
+                    "yt-dlp finished but no downloadable "
+                    "media file was created. "
+                    "Check the Render logs for the yt-dlp error."
                 )
             )
 
-        # -------------------------------------------------
-        # PICK LARGEST FILE
-        # -------------------------------------------------
+        # ----------------------------------------------------
+        # SELECT LARGEST MEDIA FILE
+        # ----------------------------------------------------
 
         file_path = max(
-            created_files,
+            files,
             key=lambda file: file.stat().st_size
         )
 
-        # -------------------------------------------------
-        # VERIFY SIZE
-        # -------------------------------------------------
-
         file_size = file_path.stat().st_size
+
+        print("=" * 60)
+        print("FILE READY")
+        print("FILE:", file_path)
+        print("SIZE:", file_size)
+        print("=" * 60)
 
         if file_size <= 0:
 
             raise HTTPException(
                 status_code=500,
-                detail="The downloaded media file is empty."
+                detail="Downloaded media file is empty."
             )
 
-        # -------------------------------------------------
-        # CLEANUP AFTER RESPONSE
-        # -------------------------------------------------
+        # ----------------------------------------------------
+        # DETERMINE MIME TYPE
+        # ----------------------------------------------------
+
+        extension = file_path.suffix.lower()
+
+        mime_types = {
+            ".mp4": "video/mp4",
+            ".mkv": "video/x-matroska",
+            ".webm": "video/webm",
+            ".mov": "video/quicktime",
+            ".avi": "video/x-msvideo",
+
+            ".mp3": "audio/mpeg",
+            ".m4a": "audio/mp4",
+            ".aac": "audio/aac",
+            ".wav": "audio/wav",
+            ".ogg": "audio/ogg",
+            ".flac": "audio/flac",
+        }
+
+        media_type = mime_types.get(
+            extension,
+            "application/octet-stream"
+        )
+
+        # ----------------------------------------------------
+        # RETURN FILE
+        # ----------------------------------------------------
 
         background_tasks.add_task(
             cleanup_download,
             temp_dir
         )
 
-        # -------------------------------------------------
-        # RETURN FILE
-        # -------------------------------------------------
-
         return FileResponse(
             path=str(file_path),
-
             filename=file_path.name,
-
-            media_type="application/octet-stream"
+            media_type=media_type,
         )
 
     except HTTPException:
 
-        cleanup_download(
-            temp_dir
-        )
+        cleanup_download(temp_dir)
 
         raise
 
     except Exception as error:
 
-        cleanup_download(
-            temp_dir
-        )
+        print("=" * 60)
+        print("DOWNLOAD ERROR")
+        print(str(error))
+        print("=" * 60)
+
+        cleanup_download(temp_dir)
 
         raise HTTPException(
             status_code=422,
@@ -382,9 +417,9 @@ async def download_link(
         ) from error
 
 
-# =========================================================
+# ============================================================
 # CLEANUP
-# =========================================================
+# ============================================================
 
 def cleanup_download(
     directory: Path
@@ -405,7 +440,6 @@ def cleanup_download(
             except Exception:
                 pass
 
-        # Remove directories from deepest level.
         directories = sorted(
             [
                 item
@@ -420,11 +454,13 @@ def cleanup_download(
 
             try:
                 folder.rmdir()
+
             except Exception:
                 pass
 
         try:
             directory.rmdir()
+
         except Exception:
             pass
 
@@ -432,17 +468,16 @@ def cleanup_download(
         pass
 
 
-# =========================================================
+# ============================================================
 # VERSION
-# =========================================================
+# ============================================================
 
 @app.get("/version")
 async def version():
 
     return {
-        "yt_dlp": (
+        "yt_dlp":
             yt_dlp.version.__version__
             if yt_dlp
             else "not installed"
-        )
     }
