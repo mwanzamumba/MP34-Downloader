@@ -1,1230 +1,809 @@
+import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
-import 'package:media_downloader/models/analyser.dart';
-import 'package:media_downloader/services/media_api.dart';
+
+import '../models/analyser.dart';
+import '../services/media_api.dart';
 
 class Homepage extends StatefulWidget {
-  const Homepage({super.key});
+  const Homepage({
+    super.key,
+    required this.username,
+  });
+
+  final String username;
 
   @override
   State<Homepage> createState() => _HomepageState();
 }
 
 class _HomepageState extends State<Homepage> {
-  final _linkController = TextEditingController();
-  final _mediaApi = MediaApi();
+  final TextEditingController _urlController =
+      TextEditingController();
 
-  String? _statusMessage;
+  final MediaApi _mediaApi = MediaApi();
+
   MediaInfo? _media;
 
-  bool _isLoading = false;
+  CancelToken? _downloadCancelToken;
+
+  bool _isAnalyzing = false;
+  bool _isDownloading = false;
+  bool _isPaused = false;
 
   double _downloadProgress = 0;
 
-  // ============================================================
-  // URL VALIDATION
-  // ============================================================
+  String? _errorMessage;
+  String? _downloadedFileName;
+  String? _downloadLocation;
 
-  bool _isValidUrl(String value) {
-    final uri = Uri.tryParse(value);
+  @override
+  void dispose() {
+    _urlController.dispose();
 
-    return uri != null &&
-        (uri.scheme == 'http' || uri.scheme == 'https') &&
-        uri.host.isNotEmpty;
+    _downloadCancelToken?.cancel(
+      'Page disposed',
+    );
+
+    super.dispose();
   }
 
-  // ============================================================
-  // ANALYZE MEDIA
-  // ============================================================
+  // ==========================================================
+  // ANALYZE
+  // ==========================================================
 
-  Future<void> _startDownload() async {
-    final link = _linkController.text.trim();
+  Future<void> _analyzeMedia() async {
+    FocusScope.of(context).unfocus();
 
-    if (!_isValidUrl(link)) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Enter a valid media link.'),
-        ),
+    final url = _urlController.text.trim();
+
+    if (url.isEmpty) {
+      _showMessage(
+        'Paste a media link first.',
       );
       return;
     }
 
-    FocusScope.of(context).unfocus();
-
     setState(() {
-      _isLoading = true;
+      _isAnalyzing = true;
+      _errorMessage = null;
       _media = null;
+      _downloadedFileName = null;
+      _downloadLocation = null;
       _downloadProgress = 0;
-      _statusMessage = 'Checking your media link...';
     });
 
     try {
-      final media = await _mediaApi.analyse(link);
+      final result = await _mediaApi.analyse(url);
 
-      if (!mounted) return;
+      if (!mounted) {
+        return;
+      }
 
       setState(() {
-        _media = media;
-        _statusMessage = 'Media is ready to download.';
+        _media = result;
       });
     } on MediaApiException catch (error) {
-      if (!mounted) return;
+      if (!mounted) {
+        return;
+      }
 
       setState(() {
-        _statusMessage = error.message;
+        _errorMessage = error.message;
       });
-    } catch (_) {
-      if (!mounted) return;
+
+      _showMessage(
+        error.message,
+      );
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
 
       setState(() {
-        _statusMessage =
-            'Unable to analyse this media link.';
+        _errorMessage = error.toString();
       });
+
+      _showMessage(
+        'Could not analyze this link.',
+      );
     } finally {
       if (mounted) {
         setState(() {
-          _isLoading = false;
+          _isAnalyzing = false;
         });
       }
     }
   }
 
-  // ============================================================
-  // DOWNLOAD MEDIA TO PHONE
-  // ============================================================
+  // ==========================================================
+  // DOWNLOAD
+  // ==========================================================
 
   Future<void> _downloadMedia() async {
-    final media = _media;
-
-    if (media == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text(
-            'Analyze a media link first.',
-          ),
-        ),
+    if (_media == null) {
+      _showMessage(
+        'Analyze the link before downloading.',
       );
       return;
     }
 
-    if (media.sourceUrl.trim().isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text(
-            'The media source URL is unavailable.',
-          ),
-        ),
+    if (_isDownloading) {
+      return;
+    }
+
+    final sourceUrl = _media!.sourceUrl;
+
+    if (sourceUrl.trim().isEmpty) {
+      _showMessage(
+        'No source URL was returned by the server.',
       );
       return;
     }
 
-    FocusScope.of(context).unfocus();
+    final title = _media!.title;
+
+    _downloadCancelToken = CancelToken();
 
     setState(() {
-      _isLoading = true;
+      _isDownloading = true;
+      _isPaused = false;
       _downloadProgress = 0;
-      _statusMessage = 'Starting download...';
+      _errorMessage = null;
+      _downloadedFileName = null;
+      _downloadLocation = null;
     });
 
     try {
       final result = await _mediaApi.download(
-        media.sourceUrl,
+        sourceUrl,
+        title: title,
+        cancelToken: _downloadCancelToken,
         onProgress: (received, total) {
-          if (!mounted) return;
+          if (!mounted) {
+            return;
+          }
 
           if (total > 0) {
-            final progress = received / total;
-
             setState(() {
-              _downloadProgress = progress.clamp(0.0, 1.0);
-
-              _statusMessage =
-                  'Downloading ${(_downloadProgress * 100).toStringAsFixed(0)}%';
-            });
-          } else {
-            setState(() {
-              _statusMessage = 'Downloading...';
+              _downloadProgress =
+                  (received / total).clamp(0.0, 1.0);
             });
           }
         },
       );
 
-      if (!mounted) return;
+      if (!mounted) {
+        return;
+      }
 
       setState(() {
         _downloadProgress = 1;
-        _statusMessage =
-            'Download complete: ${result.fileName}';
+        _downloadedFileName = result.fileName;
+        _downloadLocation = result.location;
+        _isDownloading = false;
+        _isPaused = false;
       });
 
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            'Saved ${result.fileName}',
-          ),
-          duration: const Duration(seconds: 4),
-        ),
+      _showMessage(
+        'Download complete.',
       );
-    } on MediaApiException catch (error) {
-      if (!mounted) return;
-
-      setState(() {
-        _statusMessage = error.message;
-      });
-
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(error.message),
-        ),
-      );
-    } catch (_) {
-      if (!mounted) return;
-
-      setState(() {
-        _statusMessage =
-            'Unable to download this media.';
-      });
-    } finally {
-      if (mounted) {
-        setState(() {
-          _isLoading = false;
-        });
+    } on DownloadCancelledException {
+      if (!mounted) {
+        return;
       }
+
+      setState(() {
+        _isDownloading = false;
+      });
+    } on MediaApiException catch (error) {
+      if (!mounted) {
+        return;
+      }
+
+      setState(() {
+        _isDownloading = false;
+        _isPaused = false;
+        _errorMessage = error.message;
+      });
+
+      _showMessage(
+        error.message,
+      );
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+
+      setState(() {
+        _isDownloading = false;
+        _isPaused = false;
+        _errorMessage = error.toString();
+      });
+
+      _showMessage(
+        'Download failed.',
+      );
+    } finally {
+      _downloadCancelToken = null;
     }
   }
 
-  // ============================================================
-  // MAIN BUTTON ACTION
-  // ============================================================
+  // ==========================================================
+  // PAUSE
+  // ==========================================================
 
-  void _handleMainButton() {
-    if (_media == null) {
-      _startDownload();
-    } else {
-      _downloadMedia();
+  Future<void> _pauseDownload() async {
+    if (!_isDownloading) {
+      return;
     }
+
+    setState(() {
+      _isPaused = true;
+    });
+
+    _downloadCancelToken?.cancel(
+      'Download paused',
+    );
   }
 
-  // ============================================================
-  // DISPOSE
-  // ============================================================
+  // ==========================================================
+  // RESUME
+  // ==========================================================
 
-  @override
-  void dispose() {
-    _linkController.dispose();
-    super.dispose();
+  Future<void> _resumeDownload() async {
+    if (!_isPaused) {
+      return;
+    }
+
+    setState(() {
+      _isPaused = false;
+    });
+
+    // The current backend does not support HTTP range resume.
+    // Therefore this starts the transfer again.
+    await _downloadMedia();
   }
 
-  // ============================================================
+  // ==========================================================
+  // CANCEL
+  // ==========================================================
+
+  Future<void> _cancelDownload() async {
+    if (!_isDownloading && !_isPaused) {
+      return;
+    }
+
+    _downloadCancelToken?.cancel(
+      'Download cancelled by user',
+    );
+
+    if (!mounted) {
+      return;
+    }
+
+    setState(() {
+      _isDownloading = false;
+      _isPaused = false;
+      _downloadProgress = 0;
+    });
+
+    _showMessage(
+      'Download cancelled.',
+    );
+  }
+
+  // ==========================================================
+  // MESSAGE
+  // ==========================================================
+
+  void _showMessage(String message) {
+    if (!mounted) {
+      return;
+    }
+
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          content: Text(message),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+  }
+
+  // ==========================================================
   // BUILD
-  // ============================================================
+  // ==========================================================
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final colorScheme = theme.colorScheme;
-
     return Scaffold(
-      backgroundColor: colorScheme.surface,
+      backgroundColor: const Color(0xFFF7F8FA),
       body: SafeArea(
-        child: Container(
-          decoration: BoxDecoration(
-            gradient: LinearGradient(
-              begin: Alignment.topLeft,
-              end: Alignment.bottomRight,
-              colors: [
-                colorScheme.primary.withOpacity(0.34),
-                const Color(0xFFF7F2FF),
-                colorScheme.surface,
-              ],
-              stops: const [0, 0.45, 1],
-            ),
-          ),
-          child: Center(
-            child: ConstrainedBox(
-              constraints: const BoxConstraints(
-                maxWidth: 430,
-              ),
-              child: SingleChildScrollView(
+        child: CustomScrollView(
+          slivers: [
+            SliverToBoxAdapter(
+              child: Padding(
                 padding: const EdgeInsets.fromLTRB(
                   20,
                   22,
                   20,
-                  22,
+                  0,
                 ),
-                child: Column(
-                  crossAxisAlignment:
-                      CrossAxisAlignment.stretch,
-                  children: [
-                    _Header(
-                      colorScheme: colorScheme,
-                    ),
-
-                    const SizedBox(height: 22),
-
-                    _LinkInput(
-                      controller: _linkController,
-                      isLoading: _isLoading,
-                      onDownload: _handleMainButton,
-                    ),
-
-                    const SizedBox(height: 8),
-
-                    Text(
-                      "Reminder: Respect creators' work and intellectual property rights.",
-                      style:
-                          theme.textTheme.labelSmall?.copyWith(
-                        color:
-                            colorScheme.onSurfaceVariant,
-                      ),
-                    ),
-
-                    const SizedBox(height: 20),
-
-                    _SocialPrompt(
-                      colorScheme: colorScheme,
-                    ),
-
-                    const SizedBox(height: 14),
-
-                    const _SocialRow(),
-
-                    if (_statusMessage != null ||
-                        _isLoading ||
-                        _media != null)
-                      _DownloadStatus(
-                        colorScheme: colorScheme,
-                        isLoading: _isLoading,
-                        media: _media,
-                        message: _statusMessage,
-                        progress: _downloadProgress,
-                      ),
-
-                    const SizedBox(height: 22),
-
-                    _SectionTitle(
-                      colorScheme: colorScheme,
-                    ),
-
-                    const SizedBox(height: 12),
-
-                    _RecentDownloadCard(
-                      media: _media,
-                      onDownload: _media == null
-                          ? null
-                          : _downloadMedia,
-                    ),
-
-                    const SizedBox(height: 16),
-
-                    _PremiumCard(
-                      colorScheme: colorScheme,
-                    ),
-
-                    const SizedBox(height: 20),
-
-                    // ==================================================
-                    // MAIN DOWNLOAD BUTTON
-                    // ==================================================
-
-                    FilledButton(
-                      onPressed:
-                          _isLoading ? null : _handleMainButton,
-                      style: FilledButton.styleFrom(
-                        minimumSize:
-                            const Size.fromHeight(56),
-                        shape: RoundedRectangleBorder(
-                          borderRadius:
-                              BorderRadius.circular(28),
-                        ),
-                        backgroundColor:
-                            colorScheme.primary,
-                        foregroundColor:
-                            colorScheme.onPrimary,
-                        textStyle:
-                            theme.textTheme.titleMedium
-                                ?.copyWith(
-                          fontWeight: FontWeight.w700,
-                        ),
-                      ),
-                      child: Text(
-                        _isLoading
-                            ? (_media == null
-                                ? 'Checking...'
-                                : 'Downloading...')
-                            : (_media == null
-                                ? 'Analyze'
-                                : 'Download'),
-                      ),
-                    ),
-                  ],
-                ),
+                child: _buildHeader(),
               ),
             ),
-          ),
+
+            SliverToBoxAdapter(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(
+                  20,
+                  24,
+                  20,
+                  0,
+                ),
+                child: _buildLinkSection(),
+              ),
+            ),
+
+            if (_errorMessage != null)
+              SliverToBoxAdapter(
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(
+                    20,
+                    14,
+                    20,
+                    0,
+                  ),
+                  child: _buildErrorCard(),
+                ),
+              ),
+
+            if (_media != null)
+              SliverToBoxAdapter(
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(
+                    20,
+                    18,
+                    20,
+                    0,
+                  ),
+                  child: _buildMediaCard(),
+                ),
+              ),
+
+            if (_isDownloading || _isPaused)
+              SliverToBoxAdapter(
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(
+                    20,
+                    18,
+                    20,
+                    0,
+                  ),
+                  child: _buildDownloadStatus(),
+                ),
+              ),
+
+            if (_downloadedFileName != null)
+              SliverToBoxAdapter(
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(
+                    20,
+                    18,
+                    20,
+                    0,
+                  ),
+                  child: _buildCompletedCard(),
+                ),
+              ),
+
+            SliverToBoxAdapter(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(
+                  20,
+                  24,
+                  20,
+                  30,
+                ),
+                child: _buildPremiumCard(),
+              ),
+            ),
+          ],
         ),
       ),
     );
   }
-}
 
-// ================================================================
-// HEADER
-// ================================================================
+  // ==========================================================
+  // HEADER
+  // ==========================================================
 
-class _Header extends StatelessWidget {
-  const _Header({
-    required this.colorScheme,
-  });
-
-  final ColorScheme colorScheme;
-
-  @override
-  Widget build(BuildContext context) {
-    final textTheme = Theme.of(context).textTheme;
-
+  Widget _buildHeader() {
     return Row(
       children: [
-        Container(
-          width: 48,
-          height: 48,
-          decoration: BoxDecoration(
-            shape: BoxShape.circle,
-            border: Border.all(
-              color:
-                  colorScheme.onPrimary.withOpacity(0.55),
-              width: 2,
-            ),
-            image: const DecorationImage(
-              image: AssetImage('lib/asset/1.png'),
-              fit: BoxFit.cover,
-              alignment: Alignment.topCenter,
-            ),
-          ),
-        ),
-
-        const SizedBox(width: 12),
-
         Expanded(
           child: Column(
             crossAxisAlignment:
                 CrossAxisAlignment.start,
             children: [
               Text(
-                'Video Downloader',
-                style:
-                    textTheme.titleLarge?.copyWith(
-                  color: colorScheme.onSurface,
-                  fontWeight: FontWeight.w800,
+                'Hello, ${widget.username}',
+                style: const TextStyle(
+                  fontSize: 15,
+                  color: Colors.black54,
                 ),
               ),
-
-              const SizedBox(height: 2),
-
-              Text(
-                'Download from any platform instantly',
-                style:
-                    textTheme.bodySmall?.copyWith(
-                  color:
-                      colorScheme.onSurfaceVariant,
+              const SizedBox(height: 4),
+              const Text(
+                'Download media',
+                style: TextStyle(
+                  fontSize: 27,
+                  fontWeight: FontWeight.bold,
                 ),
               ),
             ],
           ),
         ),
-
         Container(
-          width: 46,
-          height: 46,
+          width: 44,
+          height: 44,
           decoration: BoxDecoration(
-            color: colorScheme.surface,
-            shape: BoxShape.circle,
-            boxShadow: [
-              BoxShadow(
-                color:
-                    colorScheme.shadow.withOpacity(0.08),
-                blurRadius: 18,
-                offset: const Offset(0, 10),
-              ),
-            ],
+            color: Colors.black,
+            borderRadius: BorderRadius.circular(14),
           ),
-          child: Icon(
-            Icons.workspace_premium_rounded,
-            color: colorScheme.onSurface,
+          child: const Icon(
+            Icons.download_rounded,
+            color: Colors.white,
           ),
         ),
       ],
     );
   }
-}
 
-// ================================================================
-// LINK INPUT
-// ================================================================
+  // ==========================================================
+  // LINK SECTION
+  // ==========================================================
 
-class _LinkInput extends StatelessWidget {
-  const _LinkInput({
-    required this.controller,
-    required this.isLoading,
-    required this.onDownload,
-  });
-
-  final TextEditingController controller;
-  final bool isLoading;
-  final VoidCallback onDownload;
-
-  @override
-  Widget build(BuildContext context) {
-    final colorScheme =
-        Theme.of(context).colorScheme;
-
-    return Row(
+  Widget _buildLinkSection() {
+    return Column(
+      crossAxisAlignment:
+          CrossAxisAlignment.start,
       children: [
-        Expanded(
-          child: SizedBox(
-            height: 52,
-            child: TextField(
-              controller: controller,
-              keyboardType: TextInputType.url,
-              textInputAction: TextInputAction.done,
-              style: const TextStyle(
-                fontSize: 13,
-              ),
-              decoration: InputDecoration(
-                filled: true,
-                fillColor:
-                    colorScheme.surface.withOpacity(0.88),
-                hintText:
-                    'Paste your link here or auto-detect',
-                hintStyle: TextStyle(
-                  color:
-                      colorScheme.onSurfaceVariant,
-                  fontSize: 13,
-                ),
-                prefixIcon: Icon(
-                  Icons.link_rounded,
-                  color:
-                      colorScheme.onSurfaceVariant,
-                ),
-                contentPadding:
-                    const EdgeInsets.symmetric(
-                  horizontal: 16,
-                ),
-                enabledBorder: OutlineInputBorder(
-                  borderRadius:
-                      BorderRadius.circular(26),
-                  borderSide: BorderSide(
-                    color: colorScheme
-                        .outlineVariant
-                        .withOpacity(0.8),
-                  ),
-                ),
-                focusedBorder: OutlineInputBorder(
-                  borderRadius:
-                      BorderRadius.circular(26),
-                  borderSide: BorderSide(
-                    color: colorScheme.primary,
-                    width: 1.4,
-                  ),
-                ),
-              ),
-              onSubmitted: (_) => onDownload(),
-            ),
+        const Text(
+          'Paste media link',
+          style: TextStyle(
+            fontSize: 17,
+            fontWeight: FontWeight.w700,
           ),
         ),
 
-        const SizedBox(width: 10),
+        const SizedBox(height: 10),
 
         Container(
-          width: 52,
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(
+              color: const Color(0xFFE4E6EA),
+            ),
+          ),
+          child: TextField(
+            controller: _urlController,
+            keyboardType: TextInputType.url,
+            textInputAction: TextInputAction.done,
+            decoration: const InputDecoration(
+              hintText: 'https://...',
+              prefixIcon: Icon(
+                Icons.link_rounded,
+              ),
+              border: InputBorder.none,
+              contentPadding: EdgeInsets.symmetric(
+                horizontal: 16,
+                vertical: 16,
+              ),
+            ),
+            onSubmitted: (_) {
+              _analyzeMedia();
+            },
+          ),
+        ),
+
+        const SizedBox(height: 12),
+
+        // IMPORTANT:
+        // Analyze button is BELOW the TextField.
+        SizedBox(
+          width: double.infinity,
           height: 52,
-          decoration: BoxDecoration(
-            gradient: LinearGradient(
-              colors: [
-                colorScheme.primary,
-                colorScheme.secondary,
-              ],
-            ),
-            shape: BoxShape.circle,
-            boxShadow: [
-              BoxShadow(
-                color: colorScheme.primary
-                    .withOpacity(0.28),
-                blurRadius: 18,
-                offset: const Offset(0, 10),
-              ),
-            ],
-          ),
-          child: IconButton(
+          child: FilledButton.icon(
             onPressed:
-                isLoading ? null : onDownload,
-            icon: isLoading
-                ? SizedBox(
-                    width: 18,
-                    height: 18,
-                    child:
-                        CircularProgressIndicator(
-                      strokeWidth: 2,
-                      color:
-                          colorScheme.onPrimary,
-                    ),
-                  )
-                : const Icon(
-                    Icons.file_download_outlined,
-                  ),
-            color: colorScheme.onPrimary,
-            tooltip: 'Analyze / Download',
-          ),
-        ),
-      ],
-    );
-  }
-}
-
-// ================================================================
-// SOCIAL PROMPT
-// ================================================================
-
-class _SocialPrompt extends StatelessWidget {
-  const _SocialPrompt({
-    required this.colorScheme,
-  });
-
-  final ColorScheme colorScheme;
-
-  @override
-  Widget build(BuildContext context) {
-    return Row(
-      children: [
-        Expanded(
-          child: Divider(
-            color: colorScheme.outlineVariant,
-          ),
-        ),
-
-        Padding(
-          padding:
-              const EdgeInsets.symmetric(horizontal: 12),
-          child: Text(
-            'Open Social App to Copy Link',
-            style: Theme.of(context)
-                .textTheme
-                .labelMedium
-                ?.copyWith(
-              color:
-                  colorScheme.onSurfaceVariant,
-              fontWeight: FontWeight.w600,
+                _isAnalyzing || _isDownloading
+                    ? null
+                    : _analyzeMedia,
+            icon: Icon(
+              _isAnalyzing
+                  ? Icons.hourglass_top_rounded
+                  : Icons.search_rounded,
+            ),
+            label: Text(
+              _isAnalyzing
+                  ? 'Analyzing...'
+                  : 'Analyze',
+              style: const TextStyle(
+                fontWeight: FontWeight.w700,
+              ),
             ),
           ),
         ),
-
-        Expanded(
-          child: Divider(
-            color: colorScheme.outlineVariant,
-          ),
-        ),
       ],
     );
   }
-}
 
-// ================================================================
-// SOCIAL ROW
-// ================================================================
+  // ==========================================================
+  // ERROR
+  // ==========================================================
 
-class _SocialRow extends StatelessWidget {
-  const _SocialRow();
-
-  static const _items = [
-    _SocialItemData(
-      'TikTok',
-      asset: 'lib/asset/tiktok.png',
-    ),
-    _SocialItemData(
-      'Instagram',
-      asset: 'lib/asset/instagram.png',
-    ),
-    _SocialItemData(
-      'Facebook',
-      asset: 'lib/asset/facebook.png',
-    ),
-    _SocialItemData(
-      'X',
-      text: 'X',
-      background: Colors.black,
-    ),
-    _SocialItemData(
-      'Youtube',
-      asset: 'lib/asset/youtube.png',
-    ),
-  ];
-
-  @override
-  Widget build(BuildContext context) {
-    return Row(
-      mainAxisAlignment:
-          MainAxisAlignment.spaceBetween,
-      children: _items
-          .map(
-            (item) => _SocialItem(item),
-          )
-          .toList(),
+  Widget _buildErrorCard() {
+    return Container(
+      padding: const EdgeInsets.all(15),
+      decoration: BoxDecoration(
+        color: Colors.red.withOpacity(0.07),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(
+          color: Colors.red.withOpacity(0.2),
+        ),
+      ),
+      child: Row(
+        crossAxisAlignment:
+            CrossAxisAlignment.start,
+        children: [
+          const Icon(
+            Icons.error_outline_rounded,
+            color: Colors.red,
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              _errorMessage!,
+              style: const TextStyle(
+                color: Colors.red,
+              ),
+            ),
+          ),
+        ],
+      ),
     );
   }
-}
 
-class _SocialItem extends StatelessWidget {
-  const _SocialItem(this.item);
+  // ==========================================================
+  // MEDIA CARD
+  // ==========================================================
 
-  final _SocialItemData item;
+  Widget _buildMediaCard() {
+    final media = _media!;
 
-  @override
-  Widget build(BuildContext context) {
-    final colorScheme =
-        Theme.of(context).colorScheme;
-
-    return SizedBox(
-      width: 62,
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(
+          color: const Color(0xFFE6E7EA),
+        ),
+      ),
       child: Column(
+        crossAxisAlignment:
+            CrossAxisAlignment.start,
         children: [
-          Material(
-            color:
-                item.background ??
-                colorScheme.surface,
-            shape: const CircleBorder(),
-            elevation: 2,
-            shadowColor:
-                colorScheme.shadow.withOpacity(0.12),
-            child: InkWell(
-              customBorder: const CircleBorder(),
-              onTap: () {},
-              child: SizedBox(
-                width: 52,
-                height: 52,
-                child: item.asset != null
-                    ? ClipOval(
-                        child: Image.asset(
-                          item.asset!,
-                          fit: BoxFit.cover,
-                        ),
-                      )
-                    : Center(
-                        child: Text(
-                          item.text!,
-                          style: const TextStyle(
-                            color: Colors.white,
-                            fontSize: 23,
-                            fontWeight:
-                                FontWeight.w900,
-                          ),
-                        ),
+          if (media.thumbnail.isNotEmpty)
+            ClipRRect(
+              borderRadius:
+                  BorderRadius.circular(14),
+              child: AspectRatio(
+                aspectRatio: 16 / 9,
+                child: Image.network(
+                  media.thumbnail,
+                  fit: BoxFit.cover,
+                  errorBuilder:
+                      (_, __, ___) {
+                    return Container(
+                      color:
+                          const Color(0xFFF0F1F3),
+                      child: const Icon(
+                        Icons.video_library_outlined,
+                        size: 42,
+                        color: Colors.black38,
                       ),
+                    );
+                  },
+                ),
               ),
+            ),
+
+          const SizedBox(height: 14),
+
+          Text(
+            media.title,
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(
+              fontSize: 17,
+              fontWeight: FontWeight.w700,
             ),
           ),
 
           const SizedBox(height: 6),
 
           Text(
-            item.label,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: TextStyle(
-              color:
-                  colorScheme.onSurfaceVariant,
-              fontSize: 11,
-              fontWeight: FontWeight.w500,
+            media.platform,
+            style: const TextStyle(
+              color: Colors.black54,
             ),
           ),
+
+          const SizedBox(height: 14),
+
+          if (!_isDownloading && !_isPaused)
+            SizedBox(
+              width: double.infinity,
+              height: 50,
+              child: FilledButton.icon(
+                onPressed: _downloadMedia,
+                icon: const Icon(
+                  Icons.download_rounded,
+                ),
+                label: const Text(
+                  'Download',
+                  style: TextStyle(
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ),
+            ),
+
+          if (_isDownloading || _isPaused)
+            _buildDownloadButtons(),
         ],
       ),
     );
   }
-}
 
-class _SocialItemData {
-  const _SocialItemData(
-    this.label, {
-    this.asset,
-    this.text,
-    this.background,
-  });
+  // ==========================================================
+  // DOWNLOAD BUTTONS
+  // ==========================================================
 
-  final String label;
-  final String? asset;
-  final String? text;
-  final Color? background;
-}
-
-// ================================================================
-// DOWNLOAD STATUS
-// ================================================================
-
-class _DownloadStatus extends StatelessWidget {
-  const _DownloadStatus({
-    required this.colorScheme,
-    required this.isLoading,
-    required this.media,
-    required this.message,
-    required this.progress,
-  });
-
-  final ColorScheme colorScheme;
-  final bool isLoading;
-  final MediaInfo? media;
-  final String? message;
-  final double progress;
-
-  @override
-  Widget build(BuildContext context) {
-    final title =
-        media?.title ?? message ?? '';
-
-    final subtitle =
-        media?.platform ??
-        'Preparing your download';
-
-    return Padding(
-      padding: const EdgeInsets.only(top: 18),
-      child: Container(
-        padding: const EdgeInsets.all(14),
-        decoration: BoxDecoration(
-          color:
-              colorScheme.surface.withOpacity(0.82),
-          borderRadius:
-              BorderRadius.circular(18),
-          border: Border.all(
-            color:
-                colorScheme.primary
-                    .withOpacity(0.16),
-          ),
-        ),
-        child: Column(
-          children: [
-            Row(
-              children: [
-                Container(
-                  width: 38,
-                  height: 38,
-                  decoration: BoxDecoration(
-                    color:
-                        colorScheme.primary
-                            .withOpacity(0.12),
-                    shape: BoxShape.circle,
-                  ),
-                  child: isLoading
-                      ? Padding(
-                          padding:
-                              const EdgeInsets.all(10),
-                          child:
-                              CircularProgressIndicator(
-                            strokeWidth: 2,
-                            color:
-                                colorScheme.primary,
-                          ),
-                        )
-                      : Icon(
-                          Icons.check_rounded,
-                          color:
-                              colorScheme.primary,
-                        ),
-                ),
-
-                const SizedBox(width: 12),
-
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment:
-                        CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        title,
-                        maxLines: 1,
-                        overflow:
-                            TextOverflow.ellipsis,
-                        style: const TextStyle(
-                          fontWeight:
-                              FontWeight.w700,
-                          fontSize: 13,
-                        ),
-                      ),
-
-                      const SizedBox(height: 2),
-
-                      Text(
-                        subtitle,
-                        maxLines: 1,
-                        overflow:
-                            TextOverflow.ellipsis,
-                        style: TextStyle(
-                          color:
-                              colorScheme
-                                  .onSurfaceVariant,
-                          fontSize: 12,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ],
-            ),
-
-            // Download progress
-            if (isLoading && progress > 0) ...[
-              const SizedBox(height: 12),
-
-              ClipRRect(
-                borderRadius:
-                    BorderRadius.circular(10),
-                child:
-                    LinearProgressIndicator(
-                  value: progress,
-                  minHeight: 6,
-                  backgroundColor:
-                      colorScheme.primary
-                          .withOpacity(0.10),
-                  valueColor:
-                      AlwaysStoppedAnimation<Color>(
-                    colorScheme.primary,
-                  ),
-                ),
-              ),
-
-              const SizedBox(height: 6),
-
-              Align(
-                alignment:
-                    Alignment.centerRight,
-                child: Text(
-                  '${(progress * 100).toStringAsFixed(0)}%',
-                  style: TextStyle(
-                    fontSize: 11,
-                    fontWeight:
-                        FontWeight.w700,
-                    color:
-                        colorScheme.primary,
-                  ),
-                ),
-              ),
-            ],
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-// ================================================================
-// SECTION TITLE
-// ================================================================
-
-class _SectionTitle extends StatelessWidget {
-  const _SectionTitle({
-    required this.colorScheme,
-  });
-
-  final ColorScheme colorScheme;
-
-  @override
-  Widget build(BuildContext context) {
+  Widget _buildDownloadButtons() {
     return Row(
       children: [
         Expanded(
-          child: Text(
-            'Recently Download',
-            style: Theme.of(context)
-                .textTheme
-                .titleMedium
-                ?.copyWith(
-              fontWeight: FontWeight.w800,
-              color: colorScheme.onSurface,
+          child: OutlinedButton.icon(
+            onPressed:
+                _isPaused
+                    ? _resumeDownload
+                    : _pauseDownload,
+            icon: Icon(
+              _isPaused
+                  ? Icons.play_arrow_rounded
+                  : Icons.pause_rounded,
+            ),
+            label: Text(
+              _isPaused
+                  ? 'Resume'
+                  : 'Pause',
             ),
           ),
         ),
 
-        TextButton(
-          onPressed: () {},
-          style: TextButton.styleFrom(
-            foregroundColor:
-                colorScheme.onSurfaceVariant,
-            visualDensity:
-                VisualDensity.compact,
-          ),
-          child: const Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Text('View all'),
-              SizedBox(width: 4),
-              Icon(
-                Icons.chevron_right_rounded,
-                size: 18,
-              ),
-            ],
+        const SizedBox(width: 10),
+
+        Expanded(
+          child: OutlinedButton.icon(
+            onPressed: _cancelDownload,
+            style: OutlinedButton.styleFrom(
+              foregroundColor: Colors.red,
+            ),
+            icon: const Icon(
+              Icons.close_rounded,
+            ),
+            label: const Text(
+              'Cancel',
+            ),
           ),
         ),
       ],
     );
   }
-}
 
-// ================================================================
-// RECENT DOWNLOAD CARD
-// ================================================================
+  // ==========================================================
+  // DOWNLOAD STATUS
+  // ==========================================================
 
-class _RecentDownloadCard extends StatelessWidget {
-  const _RecentDownloadCard({
-    required this.media,
-    required this.onDownload,
-  });
-
-  final MediaInfo? media;
-  final VoidCallback? onDownload;
-
-  @override
-  Widget build(BuildContext context) {
-    final colorScheme =
-        Theme.of(context).colorScheme;
+  Widget _buildDownloadStatus() {
+    final percentage =
+        (_downloadProgress * 100)
+            .round();
 
     return Container(
+      padding: const EdgeInsets.all(17),
       decoration: BoxDecoration(
-        color:
-            colorScheme.surface.withOpacity(0.94),
-        borderRadius:
-            BorderRadius.circular(22),
-        boxShadow: [
-          BoxShadow(
-            color:
-                colorScheme.shadow
-                    .withOpacity(0.08),
-            blurRadius: 22,
-            offset: const Offset(0, 12),
-          ),
-        ],
-      ),
-      clipBehavior: Clip.antiAlias,
-      child: Column(
-        children: [
-          Padding(
-            padding:
-                const EdgeInsets.fromLTRB(
-              16,
-              14,
-              12,
-              12,
-            ),
-            child: Row(
-              children: [
-                CircleAvatar(
-                  radius: 22,
-                  backgroundImage:
-                      const AssetImage(
-                    'lib/asset/1.png',
-                  ),
-                  backgroundColor:
-                      colorScheme.primaryContainer,
-                ),
-
-                const SizedBox(width: 12),
-
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment:
-                        CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        media?.title ??
-                            'Reya Ramani',
-                        maxLines: 1,
-                        overflow:
-                            TextOverflow.ellipsis,
-                        style:
-                            const TextStyle(
-                          fontSize: 15,
-                          fontWeight:
-                              FontWeight.w800,
-                        ),
-                      ),
-
-                      const SizedBox(height: 2),
-
-                      Text(
-                        media?.platform ??
-                            '@reyaramani458',
-                        maxLines: 1,
-                        overflow:
-                            TextOverflow.ellipsis,
-                        style: TextStyle(
-                          color:
-                              colorScheme
-                                  .onSurfaceVariant,
-                          fontSize: 12,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-
-                IconButton(
-                  onPressed: onDownload,
-                  icon: const Icon(
-                    Icons.file_download_outlined,
-                  ),
-                  tooltip: 'Download',
-                  visualDensity:
-                      VisualDensity.compact,
-                ),
-
-                IconButton(
-                  onPressed: () {},
-                  icon: const Icon(
-                    Icons.share_outlined,
-                  ),
-                  tooltip: 'Share',
-                  visualDensity:
-                      VisualDensity.compact,
-                ),
-              ],
-            ),
-          ),
-
-          AspectRatio(
-            aspectRatio: 1.75,
-            child: Stack(
-              fit: StackFit.expand,
-              children: [
-                _RecentPreview(
-                  media: media,
-                ),
-
-                DecoratedBox(
-                  decoration:
-                      BoxDecoration(
-                    gradient:
-                        LinearGradient(
-                      begin:
-                          Alignment.topCenter,
-                      end:
-                          Alignment.bottomCenter,
-                      colors: [
-                        Colors.transparent,
-                        Colors.black
-                            .withOpacity(0.18),
-                      ],
-                    ),
-                  ),
-                ),
-
-                Center(
-                  child: Container(
-                    width: 42,
-                    height: 42,
-                    decoration:
-                        BoxDecoration(
-                      color: colorScheme
-                          .surface
-                          .withOpacity(0.9),
-                      shape: BoxShape.circle,
-                    ),
-                    child: Icon(
-                      Icons
-                          .play_arrow_rounded,
-                      color:
-                          colorScheme.primary,
-                      size: 30,
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-// ================================================================
-// RECENT PREVIEW
-// ================================================================
-
-class _RecentPreview extends StatelessWidget {
-  const _RecentPreview({
-    required this.media,
-  });
-
-  final MediaInfo? media;
-
-  @override
-  Widget build(BuildContext context) {
-    final thumbnail =
-        media?.thumbnail.trim() ?? '';
-
-    if (thumbnail.isNotEmpty) {
-      return Image.network(
-        thumbnail,
-        fit: BoxFit.cover,
-        errorBuilder:
-            (_, __, ___) => const _LocalPreview(),
-      );
-    }
-
-    return const _LocalPreview();
-  }
-}
-
-class _LocalPreview extends StatelessWidget {
-  const _LocalPreview();
-
-  @override
-  Widget build(BuildContext context) {
-    return Image.asset(
-      'lib/asset/1.png',
-      fit: BoxFit.cover,
-      alignment: Alignment.center,
-    );
-  }
-}
-
-// ================================================================
-// PREMIUM CARD
-// ================================================================
-
-class _PremiumCard extends StatelessWidget {
-  const _PremiumCard({
-    required this.colorScheme,
-  });
-
-  final ColorScheme colorScheme;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color:
-            colorScheme.surface.withOpacity(0.94),
-        borderRadius:
-            BorderRadius.circular(18),
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(18),
         border: Border.all(
-          color:
-              colorScheme.outlineVariant
-                  .withOpacity(0.6),
+          color: const Color(0xFFE6E7EA),
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment:
+            CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(
+                Icons.downloading_rounded,
+              ),
+              const SizedBox(width: 9),
+              Expanded(
+                child: Text(
+                  _isPaused
+                      ? 'Download paused'
+                      : 'Downloading...',
+                  style: const TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ),
+              Text(
+                '$percentage%',
+                style: const TextStyle(
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ],
+          ),
+
+          const SizedBox(height: 13),
+
+          ClipRRect(
+            borderRadius:
+                BorderRadius.circular(10),
+            child: LinearProgressIndicator(
+              value: _downloadProgress,
+              minHeight: 8,
+            ),
+          ),
+
+          const SizedBox(height: 14),
+
+          _buildDownloadButtons(),
+        ],
+      ),
+    );
+  }
+
+  // ==========================================================
+  // COMPLETED
+  // ==========================================================
+
+  Widget _buildCompletedCard() {
+    return Container(
+      padding: const EdgeInsets.all(17),
+      decoration: BoxDecoration(
+        color: Colors.green.withOpacity(0.07),
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(
+          color: Colors.green.withOpacity(0.2),
         ),
       ),
       child: Row(
+        crossAxisAlignment:
+            CrossAxisAlignment.start,
         children: [
-          Container(
-            width: 38,
-            height: 38,
-            decoration: BoxDecoration(
-              color: const Color(0xFFFF9F1C)
-                  .withOpacity(0.14),
-              shape: BoxShape.circle,
-            ),
-            child: const Icon(
-              Icons.workspace_premium_rounded,
-              color: Color(0xFFFF9F1C),
-              size: 23,
-            ),
+          const Icon(
+            Icons.check_circle_rounded,
+            color: Colors.green,
+            size: 30,
           ),
 
           const SizedBox(width: 12),
@@ -1235,23 +814,85 @@ class _PremiumCard extends StatelessWidget {
                   CrossAxisAlignment.start,
               children: [
                 const Text(
-                  'Premium Features',
+                  'Download complete',
                   style: TextStyle(
-                    fontSize: 14,
-                    fontWeight: FontWeight.w800,
+                    fontWeight: FontWeight.bold,
+                    fontSize: 16,
                   ),
                 ),
 
-                const SizedBox(height: 3),
+                const SizedBox(height: 5),
 
                 Text(
-                  'Remove watermarks, download audio, and unlock exclusive features.',
+                  _downloadedFileName ??
+                      'Media file',
+                  maxLines: 2,
+                  overflow:
+                      TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    color: Colors.black87,
+                  ),
+                ),
+
+                if (_downloadLocation != null)
+                  Padding(
+                    padding:
+                        const EdgeInsets.only(
+                      top: 5,
+                    ),
+                    child: Text(
+                      _downloadLocation!,
+                      style: const TextStyle(
+                        color: Colors.black54,
+                        fontSize: 13,
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ==========================================================
+  // PREMIUM
+  // ==========================================================
+
+  Widget _buildPremiumCard() {
+    return Container(
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        color: Colors.black,
+        borderRadius: BorderRadius.circular(20),
+      ),
+      child: const Row(
+        children: [
+          Icon(
+            Icons.workspace_premium_rounded,
+            color: Colors.amber,
+            size: 35,
+          ),
+          SizedBox(width: 14),
+          Expanded(
+            child: Column(
+              crossAxisAlignment:
+                  CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'MP34 Premium',
                   style: TextStyle(
-                    color:
-                        colorScheme
-                            .onSurfaceVariant,
-                    fontSize: 12,
-                    height: 1.35,
+                    color: Colors.white,
+                    fontSize: 17,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+                SizedBox(height: 5),
+                Text(
+                  'Faster downloads and more features.',
+                  style: TextStyle(
+                    color: Colors.white70,
                   ),
                 ),
               ],
