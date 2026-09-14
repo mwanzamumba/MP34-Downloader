@@ -53,3 +53,9 @@ async def download_link(data: dict):
         return {'file_name': file_name}
     except Exception as error:
         raise HTTPException(status_code=422, detail=f'Download failed: {error}') from error
+    
+@app.get("/version")
+async def version():
+    return {
+        "yt_dlp": yt_dlp.version.__version__
+    }
