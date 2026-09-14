@@ -12,32 +12,54 @@ class Homepage extends StatefulWidget {
 class _HomepageState extends State<Homepage> {
   final _linkController = TextEditingController();
   final _mediaApi = MediaApi();
+
   String? _statusMessage;
   MediaInfo? _media;
+
   bool _isLoading = false;
+
+  double _downloadProgress = 0;
+
+  // ============================================================
+  // URL VALIDATION
+  // ============================================================
 
   bool _isValidUrl(String value) {
     final uri = Uri.tryParse(value);
-    return uri != null && uri.hasScheme && uri.host.isNotEmpty;
+
+    return uri != null &&
+        (uri.scheme == 'http' || uri.scheme == 'https') &&
+        uri.host.isNotEmpty;
   }
+
+  // ============================================================
+  // ANALYZE MEDIA
+  // ============================================================
 
   Future<void> _startDownload() async {
     final link = _linkController.text.trim();
+
     if (!_isValidUrl(link)) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Enter a valid media link.')),
+        const SnackBar(
+          content: Text('Enter a valid media link.'),
+        ),
       );
       return;
     }
 
+    FocusScope.of(context).unfocus();
+
     setState(() {
       _isLoading = true;
       _media = null;
+      _downloadProgress = 0;
       _statusMessage = 'Checking your media link...';
     });
 
     try {
       final media = await _mediaApi.analyse(link);
+
       if (!mounted) return;
 
       setState(() {
@@ -46,20 +68,155 @@ class _HomepageState extends State<Homepage> {
       });
     } on MediaApiException catch (error) {
       if (!mounted) return;
-      setState(() => _statusMessage = error.message);
+
+      setState(() {
+        _statusMessage = error.message;
+      });
     } catch (_) {
       if (!mounted) return;
-      setState(() => _statusMessage = 'Unable to analyse this media link.');
+
+      setState(() {
+        _statusMessage =
+            'Unable to analyse this media link.';
+      });
     } finally {
-      if (mounted) setState(() => _isLoading = false);
+      if (mounted) {
+        setState(() {
+          _isLoading = false;
+        });
+      }
     }
   }
+
+  // ============================================================
+  // DOWNLOAD MEDIA TO PHONE
+  // ============================================================
+
+  Future<void> _downloadMedia() async {
+    final media = _media;
+
+    if (media == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Analyze a media link first.',
+          ),
+        ),
+      );
+      return;
+    }
+
+    if (media.sourceUrl.trim().isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'The media source URL is unavailable.',
+          ),
+        ),
+      );
+      return;
+    }
+
+    FocusScope.of(context).unfocus();
+
+    setState(() {
+      _isLoading = true;
+      _downloadProgress = 0;
+      _statusMessage = 'Starting download...';
+    });
+
+    try {
+      final result = await _mediaApi.download(
+        media.sourceUrl,
+        onProgress: (received, total) {
+          if (!mounted) return;
+
+          if (total > 0) {
+            final progress = received / total;
+
+            setState(() {
+              _downloadProgress = progress.clamp(0.0, 1.0);
+
+              _statusMessage =
+                  'Downloading ${(_downloadProgress * 100).toStringAsFixed(0)}%';
+            });
+          } else {
+            setState(() {
+              _statusMessage = 'Downloading...';
+            });
+          }
+        },
+      );
+
+      if (!mounted) return;
+
+      setState(() {
+        _downloadProgress = 1;
+        _statusMessage =
+            'Download complete: ${result.fileName}';
+      });
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Saved ${result.fileName}',
+          ),
+          duration: const Duration(seconds: 4),
+        ),
+      );
+    } on MediaApiException catch (error) {
+      if (!mounted) return;
+
+      setState(() {
+        _statusMessage = error.message;
+      });
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(error.message),
+        ),
+      );
+    } catch (_) {
+      if (!mounted) return;
+
+      setState(() {
+        _statusMessage =
+            'Unable to download this media.';
+      });
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isLoading = false;
+        });
+      }
+    }
+  }
+
+  // ============================================================
+  // MAIN BUTTON ACTION
+  // ============================================================
+
+  void _handleMainButton() {
+    if (_media == null) {
+      _startDownload();
+    } else {
+      _downloadMedia();
+    }
+  }
+
+  // ============================================================
+  // DISPOSE
+  // ============================================================
 
   @override
   void dispose() {
     _linkController.dispose();
     super.dispose();
   }
+
+  // ============================================================
+  // BUILD
+  // ============================================================
 
   @override
   Widget build(BuildContext context) {
@@ -84,58 +241,120 @@ class _HomepageState extends State<Homepage> {
           ),
           child: Center(
             child: ConstrainedBox(
-              constraints: const BoxConstraints(maxWidth: 430),
+              constraints: const BoxConstraints(
+                maxWidth: 430,
+              ),
               child: SingleChildScrollView(
-                padding: const EdgeInsets.fromLTRB(20, 22, 20, 22),
+                padding: const EdgeInsets.fromLTRB(
+                  20,
+                  22,
+                  20,
+                  22,
+                ),
                 child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  crossAxisAlignment:
+                      CrossAxisAlignment.stretch,
                   children: [
-                    _Header(colorScheme: colorScheme),
+                    _Header(
+                      colorScheme: colorScheme,
+                    ),
+
                     const SizedBox(height: 22),
+
                     _LinkInput(
                       controller: _linkController,
                       isLoading: _isLoading,
-                      onDownload: _startDownload,
+                      onDownload: _handleMainButton,
                     ),
+
                     const SizedBox(height: 8),
+
                     Text(
                       "Reminder: Respect creators' work and intellectual property rights.",
-                      style: theme.textTheme.labelSmall?.copyWith(
-                        color: colorScheme.onSurfaceVariant,
+                      style:
+                          theme.textTheme.labelSmall?.copyWith(
+                        color:
+                            colorScheme.onSurfaceVariant,
                       ),
                     ),
+
                     const SizedBox(height: 20),
-                    _SocialPrompt(colorScheme: colorScheme),
+
+                    _SocialPrompt(
+                      colorScheme: colorScheme,
+                    ),
+
                     const SizedBox(height: 14),
+
                     const _SocialRow(),
-                    if (_statusMessage != null || _isLoading || _media != null)
+
+                    if (_statusMessage != null ||
+                        _isLoading ||
+                        _media != null)
                       _DownloadStatus(
                         colorScheme: colorScheme,
                         isLoading: _isLoading,
                         media: _media,
                         message: _statusMessage,
+                        progress: _downloadProgress,
                       ),
+
                     const SizedBox(height: 22),
-                    _SectionTitle(colorScheme: colorScheme),
+
+                    _SectionTitle(
+                      colorScheme: colorScheme,
+                    ),
+
                     const SizedBox(height: 12),
-                    _RecentDownloadCard(media: _media),
+
+                    _RecentDownloadCard(
+                      media: _media,
+                      onDownload: _media == null
+                          ? null
+                          : _downloadMedia,
+                    ),
+
                     const SizedBox(height: 16),
-                    _PremiumCard(colorScheme: colorScheme),
+
+                    _PremiumCard(
+                      colorScheme: colorScheme,
+                    ),
+
                     const SizedBox(height: 20),
+
+                    // ==================================================
+                    // MAIN DOWNLOAD BUTTON
+                    // ==================================================
+
                     FilledButton(
-                      onPressed: _isLoading ? null : _startDownload,
+                      onPressed:
+                          _isLoading ? null : _handleMainButton,
                       style: FilledButton.styleFrom(
-                        minimumSize: const Size.fromHeight(56),
+                        minimumSize:
+                            const Size.fromHeight(56),
                         shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(28),
+                          borderRadius:
+                              BorderRadius.circular(28),
                         ),
-                        backgroundColor: colorScheme.primary,
-                        foregroundColor: colorScheme.onPrimary,
-                        textStyle: theme.textTheme.titleMedium?.copyWith(
+                        backgroundColor:
+                            colorScheme.primary,
+                        foregroundColor:
+                            colorScheme.onPrimary,
+                        textStyle:
+                            theme.textTheme.titleMedium
+                                ?.copyWith(
                           fontWeight: FontWeight.w700,
                         ),
                       ),
-                      child: Text(_isLoading ? 'Checking...' : 'Download'),
+                      child: Text(
+                        _isLoading
+                            ? (_media == null
+                                ? 'Checking...'
+                                : 'Downloading...')
+                            : (_media == null
+                                ? 'Analyze'
+                                : 'Download'),
+                      ),
                     ),
                   ],
                 ),
@@ -148,8 +367,14 @@ class _HomepageState extends State<Homepage> {
   }
 }
 
+// ================================================================
+// HEADER
+// ================================================================
+
 class _Header extends StatelessWidget {
-  const _Header({required this.colorScheme});
+  const _Header({
+    required this.colorScheme,
+  });
 
   final ColorScheme colorScheme;
 
@@ -165,7 +390,8 @@ class _Header extends StatelessWidget {
           decoration: BoxDecoration(
             shape: BoxShape.circle,
             border: Border.all(
-              color: colorScheme.onPrimary.withOpacity(0.55),
+              color:
+                  colorScheme.onPrimary.withOpacity(0.55),
               width: 2,
             ),
             image: const DecorationImage(
@@ -175,30 +401,37 @@ class _Header extends StatelessWidget {
             ),
           ),
         ),
+
         const SizedBox(width: 12),
+
         Expanded(
           child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
+            crossAxisAlignment:
+                CrossAxisAlignment.start,
             children: [
               Text(
                 'Video Downloader',
-                style: textTheme.titleLarge?.copyWith(
+                style:
+                    textTheme.titleLarge?.copyWith(
                   color: colorScheme.onSurface,
                   fontWeight: FontWeight.w800,
-                  letterSpacing: 0,
                 ),
               ),
+
               const SizedBox(height: 2),
+
               Text(
                 'Download from any platform instantly',
-                style: textTheme.bodySmall?.copyWith(
-                  color: colorScheme.onSurfaceVariant,
-                  letterSpacing: 0,
+                style:
+                    textTheme.bodySmall?.copyWith(
+                  color:
+                      colorScheme.onSurfaceVariant,
                 ),
               ),
             ],
           ),
         ),
+
         Container(
           width: 46,
           height: 46,
@@ -207,7 +440,8 @@ class _Header extends StatelessWidget {
             shape: BoxShape.circle,
             boxShadow: [
               BoxShadow(
-                color: colorScheme.shadow.withOpacity(0.08),
+                color:
+                    colorScheme.shadow.withOpacity(0.08),
                 blurRadius: 18,
                 offset: const Offset(0, 10),
               ),
@@ -223,6 +457,10 @@ class _Header extends StatelessWidget {
   }
 }
 
+// ================================================================
+// LINK INPUT
+// ================================================================
+
 class _LinkInput extends StatelessWidget {
   const _LinkInput({
     required this.controller,
@@ -236,7 +474,8 @@ class _LinkInput extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final colorScheme = Theme.of(context).colorScheme;
+    final colorScheme =
+        Theme.of(context).colorScheme;
 
     return Row(
       children: [
@@ -247,36 +486,54 @@ class _LinkInput extends StatelessWidget {
               controller: controller,
               keyboardType: TextInputType.url,
               textInputAction: TextInputAction.done,
-              style: const TextStyle(fontSize: 13),
+              style: const TextStyle(
+                fontSize: 13,
+              ),
               decoration: InputDecoration(
                 filled: true,
-                fillColor: colorScheme.surface.withOpacity(0.88),
-                hintText: 'Paste your link here or auto-detect',
+                fillColor:
+                    colorScheme.surface.withOpacity(0.88),
+                hintText:
+                    'Paste your link here or auto-detect',
                 hintStyle: TextStyle(
-                  color: colorScheme.onSurfaceVariant,
+                  color:
+                      colorScheme.onSurfaceVariant,
                   fontSize: 13,
                 ),
                 prefixIcon: Icon(
                   Icons.link_rounded,
-                  color: colorScheme.onSurfaceVariant,
+                  color:
+                      colorScheme.onSurfaceVariant,
                 ),
-                contentPadding: const EdgeInsets.symmetric(horizontal: 16),
+                contentPadding:
+                    const EdgeInsets.symmetric(
+                  horizontal: 16,
+                ),
                 enabledBorder: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(26),
+                  borderRadius:
+                      BorderRadius.circular(26),
                   borderSide: BorderSide(
-                    color: colorScheme.outlineVariant.withOpacity(0.8),
+                    color: colorScheme
+                        .outlineVariant
+                        .withOpacity(0.8),
                   ),
                 ),
                 focusedBorder: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(26),
-                  borderSide: BorderSide(color: colorScheme.primary, width: 1.4),
+                  borderRadius:
+                      BorderRadius.circular(26),
+                  borderSide: BorderSide(
+                    color: colorScheme.primary,
+                    width: 1.4,
+                  ),
                 ),
               ),
               onSubmitted: (_) => onDownload(),
             ),
           ),
         ),
+
         const SizedBox(width: 10),
+
         Container(
           width: 52,
           height: 52,
@@ -290,26 +547,32 @@ class _LinkInput extends StatelessWidget {
             shape: BoxShape.circle,
             boxShadow: [
               BoxShadow(
-                color: colorScheme.primary.withOpacity(0.28),
+                color: colorScheme.primary
+                    .withOpacity(0.28),
                 blurRadius: 18,
                 offset: const Offset(0, 10),
               ),
             ],
           ),
           child: IconButton(
-            onPressed: isLoading ? null : onDownload,
+            onPressed:
+                isLoading ? null : onDownload,
             icon: isLoading
                 ? SizedBox(
                     width: 18,
                     height: 18,
-                    child: CircularProgressIndicator(
+                    child:
+                        CircularProgressIndicator(
                       strokeWidth: 2,
-                      color: colorScheme.onPrimary,
+                      color:
+                          colorScheme.onPrimary,
                     ),
                   )
-                : const Icon(Icons.file_download_outlined),
+                : const Icon(
+                    Icons.file_download_outlined,
+                  ),
             color: colorScheme.onPrimary,
-            tooltip: 'Download',
+            tooltip: 'Analyze / Download',
           ),
         ),
       ],
@@ -317,8 +580,14 @@ class _LinkInput extends StatelessWidget {
   }
 }
 
+// ================================================================
+// SOCIAL PROMPT
+// ================================================================
+
 class _SocialPrompt extends StatelessWidget {
-  const _SocialPrompt({required this.colorScheme});
+  const _SocialPrompt({
+    required this.colorScheme,
+  });
 
   final ColorScheme colorScheme;
 
@@ -326,39 +595,79 @@ class _SocialPrompt extends StatelessWidget {
   Widget build(BuildContext context) {
     return Row(
       children: [
-        Expanded(child: Divider(color: colorScheme.outlineVariant)),
+        Expanded(
+          child: Divider(
+            color: colorScheme.outlineVariant,
+          ),
+        ),
+
         Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 12),
+          padding:
+              const EdgeInsets.symmetric(horizontal: 12),
           child: Text(
             'Open Social App to Copy Link',
-            style: Theme.of(context).textTheme.labelMedium?.copyWith(
-              color: colorScheme.onSurfaceVariant,
+            style: Theme.of(context)
+                .textTheme
+                .labelMedium
+                ?.copyWith(
+              color:
+                  colorScheme.onSurfaceVariant,
               fontWeight: FontWeight.w600,
             ),
           ),
         ),
-        Expanded(child: Divider(color: colorScheme.outlineVariant)),
+
+        Expanded(
+          child: Divider(
+            color: colorScheme.outlineVariant,
+          ),
+        ),
       ],
     );
   }
 }
 
+// ================================================================
+// SOCIAL ROW
+// ================================================================
+
 class _SocialRow extends StatelessWidget {
   const _SocialRow();
 
   static const _items = [
-    _SocialItemData('TikTok', asset: 'lib/asset/tiktok.png'),
-    _SocialItemData('Instagram', asset: 'lib/asset/instagram.png'),
-    _SocialItemData('Facebook', asset: 'lib/asset/facebook.png'),
-    _SocialItemData('X', text: 'X', background: Colors.black),
-    _SocialItemData('Youtube',asset: 'lib/asset/youtube.png' ),
+    _SocialItemData(
+      'TikTok',
+      asset: 'lib/asset/tiktok.png',
+    ),
+    _SocialItemData(
+      'Instagram',
+      asset: 'lib/asset/instagram.png',
+    ),
+    _SocialItemData(
+      'Facebook',
+      asset: 'lib/asset/facebook.png',
+    ),
+    _SocialItemData(
+      'X',
+      text: 'X',
+      background: Colors.black,
+    ),
+    _SocialItemData(
+      'Youtube',
+      asset: 'lib/asset/youtube.png',
+    ),
   ];
 
   @override
   Widget build(BuildContext context) {
     return Row(
-      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-      children: _items.map((item) => _SocialItem(item)).toList(),
+      mainAxisAlignment:
+          MainAxisAlignment.spaceBetween,
+      children: _items
+          .map(
+            (item) => _SocialItem(item),
+          )
+          .toList(),
     );
   }
 }
@@ -370,17 +679,21 @@ class _SocialItem extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final colorScheme = Theme.of(context).colorScheme;
+    final colorScheme =
+        Theme.of(context).colorScheme;
 
     return SizedBox(
       width: 62,
       child: Column(
         children: [
           Material(
-            color: item.background ?? colorScheme.surface,
+            color:
+                item.background ??
+                colorScheme.surface,
             shape: const CircleBorder(),
             elevation: 2,
-            shadowColor: colorScheme.shadow.withOpacity(0.12),
+            shadowColor:
+                colorScheme.shadow.withOpacity(0.12),
             child: InkWell(
               customBorder: const CircleBorder(),
               onTap: () {},
@@ -389,7 +702,10 @@ class _SocialItem extends StatelessWidget {
                 height: 52,
                 child: item.asset != null
                     ? ClipOval(
-                        child: Image.asset(item.asset!, fit: BoxFit.cover),
+                        child: Image.asset(
+                          item.asset!,
+                          fit: BoxFit.cover,
+                        ),
                       )
                     : Center(
                         child: Text(
@@ -397,20 +713,24 @@ class _SocialItem extends StatelessWidget {
                           style: const TextStyle(
                             color: Colors.white,
                             fontSize: 23,
-                            fontWeight: FontWeight.w900,
+                            fontWeight:
+                                FontWeight.w900,
                           ),
                         ),
                       ),
               ),
             ),
           ),
+
           const SizedBox(height: 6),
+
           Text(
             item.label,
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
             style: TextStyle(
-              color: colorScheme.onSurfaceVariant,
+              color:
+                  colorScheme.onSurfaceVariant,
               fontSize: 11,
               fontWeight: FontWeight.w500,
             ),
@@ -435,81 +755,157 @@ class _SocialItemData {
   final Color? background;
 }
 
+// ================================================================
+// DOWNLOAD STATUS
+// ================================================================
+
 class _DownloadStatus extends StatelessWidget {
   const _DownloadStatus({
     required this.colorScheme,
     required this.isLoading,
     required this.media,
     required this.message,
+    required this.progress,
   });
 
   final ColorScheme colorScheme;
   final bool isLoading;
   final MediaInfo? media;
   final String? message;
+  final double progress;
 
   @override
   Widget build(BuildContext context) {
-    final title = media?.title ?? message ?? '';
-    final subtitle = media?.platform ?? 'Preparing your download';
+    final title =
+        media?.title ?? message ?? '';
+
+    final subtitle =
+        media?.platform ??
+        'Preparing your download';
 
     return Padding(
       padding: const EdgeInsets.only(top: 18),
       child: Container(
         padding: const EdgeInsets.all(14),
         decoration: BoxDecoration(
-          color: colorScheme.surface.withOpacity(0.82),
-          borderRadius: BorderRadius.circular(18),
+          color:
+              colorScheme.surface.withOpacity(0.82),
+          borderRadius:
+              BorderRadius.circular(18),
           border: Border.all(
-            color: colorScheme.primary.withOpacity(0.16),
+            color:
+                colorScheme.primary
+                    .withOpacity(0.16),
           ),
         ),
-        child: Row(
+        child: Column(
           children: [
-            Container(
-              width: 38,
-              height: 38,
-              decoration: BoxDecoration(
-                color: colorScheme.primary.withOpacity(0.12),
-                shape: BoxShape.circle,
-              ),
-              child: isLoading
-                  ? Padding(
-                      padding: const EdgeInsets.all(10),
-                      child: CircularProgressIndicator(
-                        strokeWidth: 2,
-                        color: colorScheme.primary,
+            Row(
+              children: [
+                Container(
+                  width: 38,
+                  height: 38,
+                  decoration: BoxDecoration(
+                    color:
+                        colorScheme.primary
+                            .withOpacity(0.12),
+                    shape: BoxShape.circle,
+                  ),
+                  child: isLoading
+                      ? Padding(
+                          padding:
+                              const EdgeInsets.all(10),
+                          child:
+                              CircularProgressIndicator(
+                            strokeWidth: 2,
+                            color:
+                                colorScheme.primary,
+                          ),
+                        )
+                      : Icon(
+                          Icons.check_rounded,
+                          color:
+                              colorScheme.primary,
+                        ),
+                ),
+
+                const SizedBox(width: 12),
+
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment:
+                        CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        title,
+                        maxLines: 1,
+                        overflow:
+                            TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          fontWeight:
+                              FontWeight.w700,
+                          fontSize: 13,
+                        ),
                       ),
-                    )
-                  : Icon(Icons.check_rounded, color: colorScheme.primary),
+
+                      const SizedBox(height: 2),
+
+                      Text(
+                        subtitle,
+                        maxLines: 1,
+                        overflow:
+                            TextOverflow.ellipsis,
+                        style: TextStyle(
+                          color:
+                              colorScheme
+                                  .onSurfaceVariant,
+                          fontSize: 12,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
             ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    title,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                      fontWeight: FontWeight.w700,
-                      fontSize: 13,
-                    ),
+
+            // Download progress
+            if (isLoading && progress > 0) ...[
+              const SizedBox(height: 12),
+
+              ClipRRect(
+                borderRadius:
+                    BorderRadius.circular(10),
+                child:
+                    LinearProgressIndicator(
+                  value: progress,
+                  minHeight: 6,
+                  backgroundColor:
+                      colorScheme.primary
+                          .withOpacity(0.10),
+                  valueColor:
+                      AlwaysStoppedAnimation<Color>(
+                    colorScheme.primary,
                   ),
-                  const SizedBox(height: 2),
-                  Text(
-                    subtitle,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      color: colorScheme.onSurfaceVariant,
-                      fontSize: 12,
-                    ),
-                  ),
-                ],
+                ),
               ),
-            ),
+
+              const SizedBox(height: 6),
+
+              Align(
+                alignment:
+                    Alignment.centerRight,
+                child: Text(
+                  '${(progress * 100).toStringAsFixed(0)}%',
+                  style: TextStyle(
+                    fontSize: 11,
+                    fontWeight:
+                        FontWeight.w700,
+                    color:
+                        colorScheme.primary,
+                  ),
+                ),
+              ),
+            ],
           ],
         ),
       ),
@@ -517,8 +913,14 @@ class _DownloadStatus extends StatelessWidget {
   }
 }
 
+// ================================================================
+// SECTION TITLE
+// ================================================================
+
 class _SectionTitle extends StatelessWidget {
-  const _SectionTitle({required this.colorScheme});
+  const _SectionTitle({
+    required this.colorScheme,
+  });
 
   final ColorScheme colorScheme;
 
@@ -529,24 +931,33 @@ class _SectionTitle extends StatelessWidget {
         Expanded(
           child: Text(
             'Recently Download',
-            style: Theme.of(context).textTheme.titleMedium?.copyWith(
+            style: Theme.of(context)
+                .textTheme
+                .titleMedium
+                ?.copyWith(
               fontWeight: FontWeight.w800,
               color: colorScheme.onSurface,
             ),
           ),
         ),
+
         TextButton(
           onPressed: () {},
           style: TextButton.styleFrom(
-            foregroundColor: colorScheme.onSurfaceVariant,
-            visualDensity: VisualDensity.compact,
+            foregroundColor:
+                colorScheme.onSurfaceVariant,
+            visualDensity:
+                VisualDensity.compact,
           ),
           child: const Row(
             mainAxisSize: MainAxisSize.min,
             children: [
               Text('View all'),
               SizedBox(width: 4),
-              Icon(Icons.chevron_right_rounded, size: 18),
+              Icon(
+                Icons.chevron_right_rounded,
+                size: 18,
+              ),
             ],
           ),
         ),
@@ -555,22 +966,35 @@ class _SectionTitle extends StatelessWidget {
   }
 }
 
+// ================================================================
+// RECENT DOWNLOAD CARD
+// ================================================================
+
 class _RecentDownloadCard extends StatelessWidget {
-  const _RecentDownloadCard({required this.media});
+  const _RecentDownloadCard({
+    required this.media,
+    required this.onDownload,
+  });
 
   final MediaInfo? media;
+  final VoidCallback? onDownload;
 
   @override
   Widget build(BuildContext context) {
-    final colorScheme = Theme.of(context).colorScheme;
+    final colorScheme =
+        Theme.of(context).colorScheme;
 
     return Container(
       decoration: BoxDecoration(
-        color: colorScheme.surface.withOpacity(0.94),
-        borderRadius: BorderRadius.circular(22),
+        color:
+            colorScheme.surface.withOpacity(0.94),
+        borderRadius:
+            BorderRadius.circular(22),
         boxShadow: [
           BoxShadow(
-            color: colorScheme.shadow.withOpacity(0.08),
+            color:
+                colorScheme.shadow
+                    .withOpacity(0.08),
             blurRadius: 22,
             offset: const Offset(0, 12),
           ),
@@ -580,85 +1004,131 @@ class _RecentDownloadCard extends StatelessWidget {
       child: Column(
         children: [
           Padding(
-            padding: const EdgeInsets.fromLTRB(16, 14, 12, 12),
+            padding:
+                const EdgeInsets.fromLTRB(
+              16,
+              14,
+              12,
+              12,
+            ),
             child: Row(
               children: [
                 CircleAvatar(
                   radius: 22,
-                  backgroundImage: const AssetImage('lib/asset/1.png'),
-                  backgroundColor: colorScheme.primaryContainer,
+                  backgroundImage:
+                      const AssetImage(
+                    'lib/asset/1.png',
+                  ),
+                  backgroundColor:
+                      colorScheme.primaryContainer,
                 ),
+
                 const SizedBox(width: 12),
+
                 Expanded(
                   child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
+                    crossAxisAlignment:
+                        CrossAxisAlignment.start,
                     children: [
                       Text(
-                        media?.title ?? 'Reya Ramani',
+                        media?.title ??
+                            'Reya Ramani',
                         maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
+                        overflow:
+                            TextOverflow.ellipsis,
+                        style:
+                            const TextStyle(
                           fontSize: 15,
-                          fontWeight: FontWeight.w800,
+                          fontWeight:
+                              FontWeight.w800,
                         ),
                       ),
+
                       const SizedBox(height: 2),
+
                       Text(
-                        media?.platform ?? '@reyaramani458',
+                        media?.platform ??
+                            '@reyaramani458',
                         maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
+                        overflow:
+                            TextOverflow.ellipsis,
                         style: TextStyle(
-                          color: colorScheme.onSurfaceVariant,
+                          color:
+                              colorScheme
+                                  .onSurfaceVariant,
                           fontSize: 12,
                         ),
                       ),
                     ],
                   ),
                 ),
+
                 IconButton(
-                  onPressed: () {},
-                  icon: const Icon(Icons.file_download_outlined),
+                  onPressed: onDownload,
+                  icon: const Icon(
+                    Icons.file_download_outlined,
+                  ),
                   tooltip: 'Download',
-                  visualDensity: VisualDensity.compact,
+                  visualDensity:
+                      VisualDensity.compact,
                 ),
+
                 IconButton(
                   onPressed: () {},
-                  icon: const Icon(Icons.share_outlined),
+                  icon: const Icon(
+                    Icons.share_outlined,
+                  ),
                   tooltip: 'Share',
-                  visualDensity: VisualDensity.compact,
+                  visualDensity:
+                      VisualDensity.compact,
                 ),
               ],
             ),
           ),
+
           AspectRatio(
             aspectRatio: 1.75,
             child: Stack(
               fit: StackFit.expand,
               children: [
-                _RecentPreview(media: media),
+                _RecentPreview(
+                  media: media,
+                ),
+
                 DecoratedBox(
-                  decoration: BoxDecoration(
-                    gradient: LinearGradient(
-                      begin: Alignment.topCenter,
-                      end: Alignment.bottomCenter,
+                  decoration:
+                      BoxDecoration(
+                    gradient:
+                        LinearGradient(
+                      begin:
+                          Alignment.topCenter,
+                      end:
+                          Alignment.bottomCenter,
                       colors: [
                         Colors.transparent,
-                        Colors.black.withOpacity(0.18),
+                        Colors.black
+                            .withOpacity(0.18),
                       ],
                     ),
                   ),
                 ),
+
                 Center(
                   child: Container(
                     width: 42,
                     height: 42,
-                    decoration: BoxDecoration(
-                      color: colorScheme.surface.withOpacity(0.9),
+                    decoration:
+                        BoxDecoration(
+                      color: colorScheme
+                          .surface
+                          .withOpacity(0.9),
                       shape: BoxShape.circle,
                     ),
                     child: Icon(
-                      Icons.play_arrow_rounded,
-                      color: colorScheme.primary,
+                      Icons
+                          .play_arrow_rounded,
+                      color:
+                          colorScheme.primary,
                       size: 30,
                     ),
                   ),
@@ -672,19 +1142,28 @@ class _RecentDownloadCard extends StatelessWidget {
   }
 }
 
+// ================================================================
+// RECENT PREVIEW
+// ================================================================
+
 class _RecentPreview extends StatelessWidget {
-  const _RecentPreview({required this.media});
+  const _RecentPreview({
+    required this.media,
+  });
 
   final MediaInfo? media;
 
   @override
   Widget build(BuildContext context) {
-    final thumbnail = media?.thumbnail.trim() ?? '';
+    final thumbnail =
+        media?.thumbnail.trim() ?? '';
+
     if (thumbnail.isNotEmpty) {
       return Image.network(
         thumbnail,
         fit: BoxFit.cover,
-        errorBuilder: (_, __, ___) => _LocalPreview(),
+        errorBuilder:
+            (_, __, ___) => const _LocalPreview(),
       );
     }
 
@@ -705,8 +1184,14 @@ class _LocalPreview extends StatelessWidget {
   }
 }
 
+// ================================================================
+// PREMIUM CARD
+// ================================================================
+
 class _PremiumCard extends StatelessWidget {
-  const _PremiumCard({required this.colorScheme});
+  const _PremiumCard({
+    required this.colorScheme,
+  });
 
   final ColorScheme colorScheme;
 
@@ -715,10 +1200,14 @@ class _PremiumCard extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: colorScheme.surface.withOpacity(0.94),
-        borderRadius: BorderRadius.circular(18),
+        color:
+            colorScheme.surface.withOpacity(0.94),
+        borderRadius:
+            BorderRadius.circular(18),
         border: Border.all(
-          color: colorScheme.outlineVariant.withOpacity(0.6),
+          color:
+              colorScheme.outlineVariant
+                  .withOpacity(0.6),
         ),
       ),
       child: Row(
@@ -727,7 +1216,8 @@ class _PremiumCard extends StatelessWidget {
             width: 38,
             height: 38,
             decoration: BoxDecoration(
-              color: const Color(0xFFFF9F1C).withOpacity(0.14),
+              color: const Color(0xFFFF9F1C)
+                  .withOpacity(0.14),
               shape: BoxShape.circle,
             ),
             child: const Icon(
@@ -736,20 +1226,30 @@ class _PremiumCard extends StatelessWidget {
               size: 23,
             ),
           ),
+
           const SizedBox(width: 12),
+
           Expanded(
             child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
+              crossAxisAlignment:
+                  CrossAxisAlignment.start,
               children: [
                 const Text(
                   'Premium Features',
-                  style: TextStyle(fontSize: 14, fontWeight: FontWeight.w800),
+                  style: TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w800,
+                  ),
                 ),
+
                 const SizedBox(height: 3),
+
                 Text(
                   'Remove watermarks, download audio, and unlock exclusive features.',
                   style: TextStyle(
-                    color: colorScheme.onSurfaceVariant,
+                    color:
+                        colorScheme
+                            .onSurfaceVariant,
                     fontSize: 12,
                     height: 1.35,
                   ),
@@ -762,4 +1262,3 @@ class _PremiumCard extends StatelessWidget {
     );
   }
 }
-
