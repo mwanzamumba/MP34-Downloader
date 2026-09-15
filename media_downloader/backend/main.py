@@ -147,6 +147,7 @@ async def analyze_link(data: dict):
             "thumbnail": info.get("thumbnail") or "",
             "platform": info.get("extractor_key") or platform,
             "source_url": url,
+            "download_url": info.get('url') or ""
         }
 
     except HTTPException:
@@ -239,7 +240,9 @@ async def download_link(
             info = downloader.extract_info(
                 url,
                 download=True
+               
             )
+        print(info.key())
 
         print("=" * 60)
         print("YT-DLP FINISHED")
