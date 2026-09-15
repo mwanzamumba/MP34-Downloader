@@ -1,55 +1,71 @@
 import 'package:flutter/material.dart';
-import 'package:media_store_plus/media_store_plus.dart';
 
 import '/home.dart';
+import 'services/media_store_service.dart';
+import 'services/notification_service.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  await MediaStore.ensureInitialized();
+  await MediaStoreService.initialize();
+  await NotificationService.initialize();
 
-  MediaStore.appFolder =
-      'MP34 Downloader';
-
-  runApp(
-    const MP34DownloaderApp(),
-  );
+  runApp(const MP34DownloaderApp());
 }
 
-class MP34DownloaderApp
-    extends StatelessWidget {
-
-  const MP34DownloaderApp({
-    super.key,
-  });
+class MP34DownloaderApp extends StatelessWidget {
+  const MP34DownloaderApp({super.key});
 
   @override
-  Widget build(
-    BuildContext context,
-  ) {
-
+  Widget build(BuildContext context) {
     return MaterialApp(
-      debugShowCheckedModeBanner:
-          false,
+      title: 'MP34 Downloader',
+      debugShowCheckedModeBanner: false,
 
-      title:
-          'MP34 Downloader',
-
-      theme:
-          ThemeData(
+      theme: ThemeData(
         useMaterial3: true,
 
-        colorSchemeSeed:
-            Colors.blue,
+        colorScheme: ColorScheme.fromSeed(
+          seedColor: Colors.indigo,
+          brightness: Brightness.light,
+        ),
 
         scaffoldBackgroundColor:
-            const Color(
-          0xFFF7F9FC,
+            const Color(0xFFF7F8FC),
+
+        inputDecorationTheme:
+            InputDecorationTheme(
+          filled: true,
+          fillColor: Colors.white,
+
+          border: OutlineInputBorder(
+            borderRadius:
+                BorderRadius.circular(16),
+            borderSide: BorderSide.none,
+          ),
+
+          enabledBorder:
+              OutlineInputBorder(
+            borderRadius:
+                BorderRadius.circular(16),
+            borderSide: BorderSide(
+              color: Colors.grey.shade200,
+            ),
+          ),
+
+          focusedBorder:
+              OutlineInputBorder(
+            borderRadius:
+                BorderRadius.circular(16),
+            borderSide: const BorderSide(
+              color: Colors.indigo,
+              width: 2,
+            ),
+          ),
         ),
       ),
 
-      home:
-          const Homepage(),
+      home: const Homepage(),
     );
   }
 }

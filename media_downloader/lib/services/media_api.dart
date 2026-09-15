@@ -12,23 +12,15 @@ class MediaApi {
       : _dio = Dio(
           BaseOptions(
             baseUrl: baseUrl,
-            connectTimeout:
-                const Duration(seconds: 30),
-            receiveTimeout:
-                const Duration(minutes: 30),
-            sendTimeout:
-                const Duration(seconds: 30),
+            connectTimeout: const Duration(seconds: 30),
+            receiveTimeout: const Duration(minutes: 30),
+            sendTimeout: const Duration(seconds: 30),
             headers: {
               'Accept': '*/*',
-              'User-Agent':
-                  'facebookexternalhit/1.1',
+              'User-Agent': 'facebookexternalhit/1.1',
             },
           ),
         );
-
-  // ============================================================
-  // ANALYZE URL
-  // ============================================================
 
   Future<MediaAnalysis> analyze(
     String url,
@@ -41,18 +33,12 @@ class MediaApi {
     );
 
     return MediaAnalysis.fromJson(
-      Map<String, dynamic>.from(
-        response.data,
-      ),
+      Map<String, dynamic>.from(response.data),
     );
   }
 
-  // ============================================================
-  // DOWNLOAD VIDEO STREAM
-  // ============================================================
-
-  Future<void> downloadVideo({
-    required MediaAnalysis media,
+  Future<void> downloadStream({
+    required String url,
     required String savePath,
     required CancelToken cancelToken,
     required void Function(
@@ -61,43 +47,14 @@ class MediaApi {
     ) onProgress,
   }) async {
     await _dio.download(
-      media.video.url,
+      url,
       savePath,
       cancelToken: cancelToken,
       onReceiveProgress: onProgress,
       options: Options(
         headers: {
           'Accept': '*/*',
-          'User-Agent':
-              'facebookexternalhit/1.1',
-        },
-      ),
-    );
-  }
-
-  // ============================================================
-  // DOWNLOAD AUDIO STREAM
-  // ============================================================
-
-  Future<void> downloadAudio({
-    required MediaAnalysis media,
-    required String savePath,
-    required CancelToken cancelToken,
-    required void Function(
-      int received,
-      int total,
-    ) onProgress,
-  }) async {
-    await _dio.download(
-      media.audio.url,
-      savePath,
-      cancelToken: cancelToken,
-      onReceiveProgress: onProgress,
-      options: Options(
-        headers: {
-          'Accept': '*/*',
-          'User-Agent':
-              'facebookexternalhit/1.1',
+          'User-Agent': 'facebookexternalhit/1.1',
         },
       ),
     );

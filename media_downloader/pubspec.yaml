@@ -8,6 +8,7 @@ environment:
 
 dependencies:
   dio: ^5.11.1
+  ffmpeg_kit_flutter_new: ^4.6.2
   flutter:
     sdk: flutter
   flutter_local_notifications: ^22.3.1
