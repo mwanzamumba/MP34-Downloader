@@ -1,10 +1,8 @@
-from pathlib import Path
 from urllib.parse import urlparse
-import tempfile
 
-from fastapi import FastAPI, HTTPException, BackgroundTasks
+import httpx
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
 
 try:
     import yt_dlp
@@ -40,13 +38,13 @@ def validate_url(value: str) -> str:
     if parsed.scheme not in ("http", "https"):
         raise HTTPException(
             status_code=422,
-            detail="Please provide a valid http or https URL."
+            detail="Please provide a valid http or https URL.",
         )
 
     if not parsed.netloc:
         raise HTTPException(
             status_code=422,
-            detail="Invalid media URL."
+            detail="Invalid media URL.",
         )
 
     return value
@@ -85,19 +83,36 @@ def platform_for(url: str) -> str:
 async def home():
     return {
         "status": "online",
-        "service": "MP34 Downloader API"
+        "service": "MP34 Downloader API",
+    }
+
+
+# ============================================================
+# VERSION
+# ============================================================
+
+@app.get("/version")
+async def version():
+    return {
+        "yt_dlp": (
+            yt_dlp.version.__version__
+            if yt_dlp
+            else "not installed"
+        )
     }
 
 
 # ============================================================
 # ANALYZE
 # ============================================================
+
 @app.post("/analyze")
 async def analyze_link(data: dict):
+
     if not isinstance(data, dict):
         raise HTTPException(
             status_code=422,
-            detail="Request body must be JSON."
+            detail="Request body must be JSON.",
         )
 
     raw_url = data.get("url")
@@ -105,7 +120,7 @@ async def analyze_link(data: dict):
     if not raw_url:
         raise HTTPException(
             status_code=422,
-            detail="Please provide a media URL."
+            detail="Please provide a media URL.",
         )
 
     url = validate_url(str(raw_url))
@@ -113,10 +128,15 @@ async def analyze_link(data: dict):
     if yt_dlp is None:
         raise HTTPException(
             status_code=503,
-            detail="yt-dlp is not installed."
+            detail="yt-dlp is not installed.",
         )
 
     try:
+
+        # ----------------------------------------------------
+        # YT-DLP OPTIONS
+        # ----------------------------------------------------
+
         options = {
             "quiet": True,
             "no_warnings": True,
@@ -124,7 +144,12 @@ async def analyze_link(data: dict):
             "noplaylist": True,
         }
 
+        # ----------------------------------------------------
+        # EXTRACT INFORMATION
+        # ----------------------------------------------------
+
         with yt_dlp.YoutubeDL(options) as downloader:
+
             info = downloader.extract_info(
                 url,
                 download=False,
@@ -133,15 +158,20 @@ async def analyze_link(data: dict):
         if not info:
             raise HTTPException(
                 status_code=422,
-                detail="Could not find media information."
+                detail="Could not find media information.",
             )
 
         formats = info.get("formats", [])
+
+        # ----------------------------------------------------
+        # FIND VIDEO AND AUDIO STREAMS
+        # ----------------------------------------------------
 
         video_formats = []
         audio_formats = []
 
         for fmt in formats:
+
             stream_url = fmt.get("url")
 
             if not stream_url:
@@ -150,41 +180,84 @@ async def analyze_link(data: dict):
             video_ext = fmt.get("video_ext")
             audio_ext = fmt.get("audio_ext")
 
-            if video_ext and video_ext != "none":
+            # Video stream
+            if (
+                video_ext
+                and video_ext != "none"
+            ):
                 video_formats.append(fmt)
 
-            if audio_ext and audio_ext != "none":
+            # Audio stream
+            if (
+                audio_ext
+                and audio_ext != "none"
+            ):
                 audio_formats.append(fmt)
+
+        # ----------------------------------------------------
+        # CHECK VIDEO
+        # ----------------------------------------------------
 
         if not video_formats:
             raise HTTPException(
                 status_code=422,
-                detail="No downloadable video stream was found."
+                detail="No downloadable video stream was found.",
             )
+
+        # ----------------------------------------------------
+        # CHECK AUDIO
+        # ----------------------------------------------------
 
         if not audio_formats:
             raise HTTPException(
                 status_code=422,
-                detail="No downloadable audio stream was found."
+                detail="No downloadable audio stream was found.",
             )
 
-        # Prefer progressive MP4 video streams.
+        # ====================================================
+        # VIDEO SELECTION
+        # ====================================================
+
+        # Prefer Facebook-style progressive MP4 formats
+        # such as "hd" and "sd".
+
         progressive_video = [
-            fmt for fmt in video_formats
-            if fmt.get("ext") == "mp4"
-            and fmt.get("format_id") in {"hd", "sd"}
+            fmt
+            for fmt in video_formats
+            if (
+                fmt.get("ext") == "mp4"
+                and str(fmt.get("format_id", "")).lower()
+                in {"hd", "sd"}
+            )
         ]
 
         if progressive_video:
             video_formats = progressive_video
 
-        # Prefer HD over SD.
         def video_score(fmt):
+
+            format_id = str(
+                fmt.get("format_id", "")
+            ).lower()
+
+            # Explicit quality preference.
+            if format_id == "hd":
+                quality_bonus = 2_000_000
+
+            elif format_id == "sd":
+                quality_bonus = 1_000_000
+
+            else:
+                quality_bonus = 0
+
             width = fmt.get("width") or 0
             height = fmt.get("height") or 0
+            bitrate = fmt.get("tbr") or 0
+
             return (
-                width * height,
-                fmt.get("tbr") or 0,
+                quality_bonus
+                + (width * height)
+                + bitrate
             )
 
         best_video = max(
@@ -192,9 +265,16 @@ async def analyze_link(data: dict):
             key=video_score,
         )
 
-        # Prefer M4A audio.
+        # ====================================================
+        # AUDIO SELECTION
+        # ====================================================
+
+        # Prefer M4A/AAC because it can later be converted
+        # to MP3 on the phone.
+
         m4a_audio = [
-            fmt for fmt in audio_formats
+            fmt
+            for fmt in audio_formats
             if fmt.get("ext") == "m4a"
         ]
 
@@ -202,6 +282,7 @@ async def analyze_link(data: dict):
             audio_formats = m4a_audio
 
         def audio_score(fmt):
+
             return (
                 fmt.get("abr") or 0,
                 fmt.get("tbr") or 0,
@@ -212,360 +293,216 @@ async def analyze_link(data: dict):
             key=audio_score,
         )
 
+        # ====================================================
+        # RESPONSE
+        # ====================================================
+
         return {
-            "title": info.get("title") or "Untitled media",
-            "thumbnail": info.get("thumbnail") or "",
-            "platform": info.get("extractor_key")
-                or platform_for(url),
+
+            "title": (
+                info.get("title")
+                or "Untitled media"
+            ),
+
+            "thumbnail": (
+                info.get("thumbnail")
+                or ""
+            ),
+
+            "platform": (
+                info.get("extractor_key")
+                or platform_for(url)
+            ),
+
             "source_url": url,
 
+            # ------------------------------------------------
+            # VIDEO
+            # ------------------------------------------------
+
             "video": {
+
                 "url": best_video.get("url"),
-                "format_id": best_video.get("format_id"),
-                "extension": best_video.get("ext") or "mp4",
-                "width": best_video.get("width"),
-                "height": best_video.get("height"),
-                "resolution": best_video.get("resolution"),
+
+                "format_id": (
+                    best_video.get("format_id")
+                ),
+
+                "extension": (
+                    best_video.get("ext")
+                    or "mp4"
+                ),
+
+                "width": (
+                    best_video.get("width")
+                ),
+
+                "height": (
+                    best_video.get("height")
+                ),
+
+                "resolution": (
+                    best_video.get("resolution")
+                ),
             },
 
+            # ------------------------------------------------
+            # AUDIO
+            # ------------------------------------------------
+
             "audio": {
+
                 "url": best_audio.get("url"),
-                "format_id": best_audio.get("format_id"),
-                "extension": best_audio.get("ext") or "m4a",
-                "abr": best_audio.get("abr"),
+
+                "format_id": (
+                    best_audio.get("format_id")
+                ),
+
+                "extension": (
+                    best_audio.get("ext")
+                    or "m4a"
+                ),
+
+                "abr": (
+                    best_audio.get("abr")
+                ),
             },
+
+            # ------------------------------------------------
+            # AVAILABLE OUTPUTS
+            # ------------------------------------------------
+
+            "available_formats": [
+                "mp3",
+                "mp4",
+            ],
         }
 
     except HTTPException:
         raise
 
     except Exception as error:
+
         raise HTTPException(
             status_code=422,
-            detail=f"Could not analyse this link: {error}"
+            detail=(
+                f"Could not analyse this link: {error}"
+            ),
         ) from error
+
+
 # ============================================================
-# DOWNLOAD
+# VALIDATE STREAMS
 # ============================================================
 
-@app.post("/download")
-async def download_link(
-    data: dict,
-    background_tasks: BackgroundTasks
-):
+@app.post("/validate-streams")
+async def validate_streams(data: dict):
 
     if not isinstance(data, dict):
         raise HTTPException(
             status_code=422,
-            detail="Request body must be JSON."
+            detail="Request body must be JSON.",
         )
 
-    raw_url = data.get("url")
+    video_url = data.get("video_url")
+    audio_url = data.get("audio_url")
 
-    if not raw_url:
+    if not video_url:
         raise HTTPException(
             status_code=422,
-            detail="Please provide a media URL."
+            detail="video_url is required.",
         )
 
-    url = validate_url(str(raw_url))
-
-    if yt_dlp is None:
+    if not audio_url:
         raise HTTPException(
-            status_code=503,
-            detail="yt-dlp is not installed."
+            status_code=422,
+            detail="audio_url is required.",
         )
 
-    temp_dir = Path(
-        tempfile.mkdtemp(
-            prefix="mp34_download_"
-        )
-    )
+    headers = {
+        "User-Agent": "facebookexternalhit/1.1",
+        "Accept": "*/*",
+    }
 
     try:
 
-        # ----------------------------------------------------
-        # Predictable output filename
-        # ----------------------------------------------------
+        async with httpx.AsyncClient(
+            follow_redirects=True,
+            timeout=30.0,
+        ) as client:
 
-        output_template = str(
-            temp_dir / "download.%(ext)s"
-        )
+            # ------------------------------------------------
+            # VIDEO
+            # ------------------------------------------------
 
-        options = {
-            "quiet": False,
-            "no_warnings": False,
+            video_response = await client.head(
+                video_url,
+                headers=headers,
+            )
 
-            "noplaylist": True,
+            # ------------------------------------------------
+            # AUDIO
+            # ------------------------------------------------
 
-            # Use one complete downloadable format.
-            "format": "best",
+            audio_response = await client.head(
+                audio_url,
+                headers=headers,
+            )
 
-            "outtmpl": output_template,
+        return {
 
-            "continuedl": True,
+            "video": {
 
-            "merge_output_format": "mp4",
+                "status_code": (
+                    video_response.status_code
+                ),
+
+                "content_type": (
+                    video_response.headers.get(
+                        "content-type"
+                    )
+                ),
+
+                "content_length": (
+                    video_response.headers.get(
+                        "content-length"
+                    )
+                ),
+
+                "accessible": (
+                    video_response.status_code < 400
+                ),
+            },
+
+            "audio": {
+
+                "status_code": (
+                    audio_response.status_code
+                ),
+
+                "content_type": (
+                    audio_response.headers.get(
+                        "content-type"
+                    )
+                ),
+
+                "content_length": (
+                    audio_response.headers.get(
+                        "content-length"
+                    )
+                ),
+
+                "accessible": (
+                    audio_response.status_code < 400
+                ),
+            },
         }
-
-        print("=" * 60)
-        print("MP34 DOWNLOAD START")
-        print("URL:", url)
-        print("TEMP DIRECTORY:", temp_dir)
-        print("=" * 60)
-
-        # ----------------------------------------------------
-        # DOWNLOAD
-        # ----------------------------------------------------
-
-        with yt_dlp.YoutubeDL(options) as downloader:
-
-            info = downloader.extract_info(
-                url,
-                download=True
-               
-            )
-        print(info.key())
-
-        print("=" * 60)
-        print("YT-DLP FINISHED")
-        print(
-            "TITLE:",
-            info.get("title") if info else "unknown"
-        )
-        print("=" * 60)
-
-        # ----------------------------------------------------
-        # FIND ACTUAL CREATED FILE
-        # ----------------------------------------------------
-
-        files = []
-
-        for file in temp_dir.rglob("*"):
-
-            if not file.is_file():
-                continue
-
-            if file.name.endswith(".part"):
-                continue
-
-            if file.name.endswith(".ytdl"):
-                continue
-
-            try:
-
-                if file.stat().st_size <= 0:
-                    continue
-
-            except Exception:
-
-                continue
-
-            files.append(file)
-
-        # ----------------------------------------------------
-        # PRINT CREATED FILES
-        # ----------------------------------------------------
-
-        print("FILES CREATED:")
-
-        for file in files:
-
-            try:
-
-                print(
-                    " -",
-                    file.name,
-                    file.stat().st_size,
-                    "bytes"
-                )
-
-            except Exception:
-
-                print(
-                    " -",
-                    file.name
-                )
-
-        # ----------------------------------------------------
-        # NO FILE
-        # ----------------------------------------------------
-
-        if not files:
-
-            all_items = []
-
-            for item in temp_dir.rglob("*"):
-                all_items.append(str(item))
-
-            print(
-                "NO USABLE MEDIA FILE WAS CREATED."
-            )
-
-            print(
-                "DIRECTORY CONTENT:"
-            )
-
-            print(all_items)
-
-            raise HTTPException(
-                status_code=500,
-                detail=(
-                    "yt-dlp finished but no media "
-                    "file was created."
-                )
-            )
-
-        # ----------------------------------------------------
-        # SELECT LARGEST FILE
-        # ----------------------------------------------------
-
-        file_path = max(
-            files,
-            key=lambda file: file.stat().st_size
-        )
-
-        file_size = file_path.stat().st_size
-
-        print("=" * 60)
-        print("FILE READY")
-        print("FILE:", file_path)
-        print("SIZE:", file_size, "bytes")
-        print("=" * 60)
-
-        if file_size <= 0:
-
-            raise HTTPException(
-                status_code=500,
-                detail="Downloaded media file is empty."
-            )
-
-        # ----------------------------------------------------
-        # MIME TYPE
-        # ----------------------------------------------------
-
-        extension = file_path.suffix.lower()
-
-        mime_types = {
-            ".mp4": "video/mp4",
-            ".mkv": "video/x-matroska",
-            ".webm": "video/webm",
-            ".mov": "video/quicktime",
-            ".avi": "video/x-msvideo",
-
-            ".mp3": "audio/mpeg",
-            ".m4a": "audio/mp4",
-            ".aac": "audio/aac",
-            ".wav": "audio/wav",
-            ".ogg": "audio/ogg",
-            ".flac": "audio/flac",
-        }
-
-        media_type = mime_types.get(
-            extension,
-            "application/octet-stream"
-        )
-
-        # ----------------------------------------------------
-        # RETURN FILE
-        # ----------------------------------------------------
-
-        background_tasks.add_task(
-            cleanup_download,
-            temp_dir
-        )
-
-        return FileResponse(
-            path=str(file_path),
-            filename=file_path.name,
-            media_type=media_type,
-        )
-
-    except HTTPException:
-
-        cleanup_download(temp_dir)
-
-        raise
 
     except Exception as error:
 
-        print("=" * 60)
-        print("DOWNLOAD ERROR")
-        print(str(error))
-        print("=" * 60)
-
-        cleanup_download(temp_dir)
-
         raise HTTPException(
-            status_code=422,
-            detail={
-                "message": "Download failed.",
-                "error": str(error),
-            }
+            status_code=502,
+            detail=(
+                f"Could not validate media streams: {error}"
+            ),
         ) from error
-
-
-# ============================================================
-# CLEANUP
-# ============================================================
-
-def cleanup_download(
-    directory: Path
-):
-
-    try:
-
-        if not directory.exists():
-            return
-
-        for file in directory.rglob("*"):
-
-            try:
-
-                if file.is_file():
-                    file.unlink()
-
-            except Exception:
-                pass
-
-        directories = sorted(
-            [
-                item
-                for item in directory.rglob("*")
-                if item.is_dir()
-            ],
-            key=lambda item: len(item.parts),
-            reverse=True,
-        )
-
-        for folder in directories:
-
-            try:
-                folder.rmdir()
-
-            except Exception:
-                pass
-
-        try:
-            directory.rmdir()
-
-        except Exception:
-            pass
-
-    except Exception:
-        pass
-
-
-# ============================================================
-# VERSION
-# ============================================================
-
-@app.get("/version")
-async def version():
-
-    return {
-        "yt_dlp":
-            yt_dlp.version.__version__
-            if yt_dlp
-            else "not installed"
-    }
