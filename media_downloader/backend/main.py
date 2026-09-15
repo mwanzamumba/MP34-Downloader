@@ -92,7 +92,6 @@ async def home():
 # ============================================================
 # ANALYZE
 # ============================================================
-
 @app.post("/analyze")
 async def analyze_link(data: dict):
     if not isinstance(data, dict):
@@ -128,7 +127,7 @@ async def analyze_link(data: dict):
         with yt_dlp.YoutubeDL(options) as downloader:
             info = downloader.extract_info(
                 url,
-                download=False
+                download=False,
             )
 
         if not info:
@@ -139,30 +138,102 @@ async def analyze_link(data: dict):
 
         formats = info.get("formats", [])
 
-        format_summary = []
+        video_formats = []
+        audio_formats = []
 
         for fmt in formats:
-            format_summary.append({
-                "format_id": fmt.get("format_id"),
-                "ext": fmt.get("ext"),
-                "resolution": fmt.get("resolution"),
-                "width": fmt.get("width"),
-                "height": fmt.get("height"),
-                "video_codec": fmt.get("vcodec"),
-                "audio_codec": fmt.get("acodec"),
-                "video": fmt.get("video_ext"),
-                "audio": fmt.get("audio_ext"),
-                "has_url": bool(fmt.get("url")),
-                "protocol": fmt.get("protocol"),
-            })
+            stream_url = fmt.get("url")
+
+            if not stream_url:
+                continue
+
+            video_ext = fmt.get("video_ext")
+            audio_ext = fmt.get("audio_ext")
+
+            if video_ext and video_ext != "none":
+                video_formats.append(fmt)
+
+            if audio_ext and audio_ext != "none":
+                audio_formats.append(fmt)
+
+        if not video_formats:
+            raise HTTPException(
+                status_code=422,
+                detail="No downloadable video stream was found."
+            )
+
+        if not audio_formats:
+            raise HTTPException(
+                status_code=422,
+                detail="No downloadable audio stream was found."
+            )
+
+        # Prefer progressive MP4 video streams.
+        progressive_video = [
+            fmt for fmt in video_formats
+            if fmt.get("ext") == "mp4"
+            and fmt.get("format_id") in {"hd", "sd"}
+        ]
+
+        if progressive_video:
+            video_formats = progressive_video
+
+        # Prefer HD over SD.
+        def video_score(fmt):
+            width = fmt.get("width") or 0
+            height = fmt.get("height") or 0
+            return (
+                width * height,
+                fmt.get("tbr") or 0,
+            )
+
+        best_video = max(
+            video_formats,
+            key=video_score,
+        )
+
+        # Prefer M4A audio.
+        m4a_audio = [
+            fmt for fmt in audio_formats
+            if fmt.get("ext") == "m4a"
+        ]
+
+        if m4a_audio:
+            audio_formats = m4a_audio
+
+        def audio_score(fmt):
+            return (
+                fmt.get("abr") or 0,
+                fmt.get("tbr") or 0,
+            )
+
+        best_audio = max(
+            audio_formats,
+            key=audio_score,
+        )
 
         return {
             "title": info.get("title") or "Untitled media",
             "thumbnail": info.get("thumbnail") or "",
-            "platform": info.get("extractor_key") or platform_for(url),
+            "platform": info.get("extractor_key")
+                or platform_for(url),
             "source_url": url,
-            "format_count": len(formats),
-            "formats": format_summary,
+
+            "video": {
+                "url": best_video.get("url"),
+                "format_id": best_video.get("format_id"),
+                "extension": best_video.get("ext") or "mp4",
+                "width": best_video.get("width"),
+                "height": best_video.get("height"),
+                "resolution": best_video.get("resolution"),
+            },
+
+            "audio": {
+                "url": best_audio.get("url"),
+                "format_id": best_audio.get("format_id"),
+                "extension": best_audio.get("ext") or "m4a",
+                "abr": best_audio.get("abr"),
+            },
         }
 
     except HTTPException:
@@ -173,7 +244,6 @@ async def analyze_link(data: dict):
             status_code=422,
             detail=f"Could not analyse this link: {error}"
         ) from error
-
 # ============================================================
 # DOWNLOAD
 # ============================================================
