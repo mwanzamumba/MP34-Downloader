@@ -93,73 +93,29 @@ async def home():
 # ANALYZE
 # ============================================================
 
-@app.post("/analyze")
+@app.post('/analyze')
 async def analyze_link(data: dict):
-
-    if not isinstance(data, dict):
-        raise HTTPException(
-            status_code=422,
-            detail="Request body must be JSON."
-        )
-
-    raw_url = data.get("url")
-
-    if not raw_url:
-        raise HTTPException(
-            status_code=422,
-            detail="Please provide a media URL."
-        )
-
-    url = validate_url(str(raw_url))
-
-    if yt_dlp is None:
-        raise HTTPException(
-            status_code=503,
-            detail="yt-dlp is not installed."
-        )
-
+    url = validate_url(str(data.get('url', '')))
     platform = platform_for(url)
 
-    try:
+    with yt_dlp.YoutubeDL({
+        'quiet': True,
+        'skip_download': True,
+        'noplaylist': True,
+    }) as downloader:
 
-        options = {
-            "quiet": True,
-            "no_warnings": True,
-            "skip_download": True,
-            "noplaylist": True,
-        }
+        info = downloader.extract_info(
+            url,
+            download=False,
+        )
 
-        with yt_dlp.YoutubeDL(options) as downloader:
+    formats = info.get("formats", [])
 
-            info = downloader.extract_info(
-                url,
-                download=False
-            )
-
-        if not info:
-            raise HTTPException(
-                status_code=422,
-                detail="Could not find media information."
-            )
-
-        return {
-            "title": info.get("title") or "Untitled media",
-            "thumbnail": info.get("thumbnail") or "",
-            "platform": info.get("extractor_key") or platform,
-            "source_url": url,
-            "download_url": info.get('url') or ""
-        }
-
-    except HTTPException:
-        raise
-
-    except Exception as error:
-
-        raise HTTPException(
-            status_code=422,
-            detail=f"Could not analyse this link: {error}"
-        ) from error
-
+    return {
+        "title": info.get("title"),
+        "format_count": len(formats),
+        "formats": formats[:3]
+    }
 
 # ============================================================
 # DOWNLOAD
