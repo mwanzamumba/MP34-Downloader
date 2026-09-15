@@ -1,41 +1,37 @@
+import 'dart:io';
+
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
+import 'package:path_provider/path_provider.dart';
 
 import '../models/analyser.dart';
 import '../services/media_api.dart';
 
 class Homepage extends StatefulWidget {
-  const Homepage({
-    super.key,
-  });
+  const Homepage({super.key});
 
   @override
-  State<Homepage> createState() =>
-      _HomepageState();
+  State<Homepage> createState() => _HomepageState();
 }
 
-class _HomepageState
-    extends State<Homepage> {
-
-  final TextEditingController
-      _urlController =
+class _HomepageState extends State<Homepage> {
+  final TextEditingController _urlController =
       TextEditingController();
 
-  final MediaApi _api =
-      MediaApi.instance;
+  final MediaApi _api = MediaApi();
 
-  MediaInfo? _media;
+  MediaAnalysis? _media;
 
   CancelToken? _cancelToken;
 
-  double _progress = 0.0;
-
   bool _isAnalyzing = false;
   bool _isDownloading = false;
-  bool _downloadComplete = false;
 
-  String? _savedFileName;
-  String? _errorMessage;
+  double _progress = 0;
+
+  String _selectedFormat = 'MP4';
+
+  String _status = '';
 
   @override
   void dispose() {
@@ -48,51 +44,48 @@ class _HomepageState
   // ============================================================
 
   Future<void> _analyze() async {
-
-    final url =
-        _urlController.text.trim();
+    final url = _urlController.text.trim();
 
     if (url.isEmpty) {
-      _showError(
+      _showMessage(
         'Please enter a media URL.',
       );
       return;
     }
 
-    FocusScope.of(context)
-        .unfocus();
+    FocusScope.of(context).unfocus();
 
     setState(() {
       _isAnalyzing = true;
-      _downloadComplete = false;
-      _savedFileName = null;
-      _errorMessage = null;
       _media = null;
+      _status = 'Analyzing media...';
     });
 
     try {
-
-      final media =
-          await _api.analyze(
-        url,
-      );
+      final result = await _api.analyze(url);
 
       if (!mounted) return;
 
       setState(() {
-        _media = media;
-        _isAnalyzing = false;
+        _media = result;
+        _status = 'Media ready';
       });
-
     } catch (error) {
-
       if (!mounted) return;
 
       setState(() {
-        _isAnalyzing = false;
-        _errorMessage =
-            error.toString();
+        _status = '';
       });
+
+      _showMessage(
+        _cleanError(error),
+      );
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isAnalyzing = false;
+        });
+      }
     }
   }
 
@@ -101,133 +94,188 @@ class _HomepageState
   // ============================================================
 
   Future<void> _download() async {
-
-    final media = _media;
-
-    if (media == null) {
+    if (_media == null) {
+      _showMessage(
+        'Analyze a media link first.',
+      );
       return;
     }
 
-    FocusScope.of(context)
-        .unfocus();
+    if (_selectedFormat == 'MP3') {
+      _showMessage(
+        'MP3 conversion will be added in the next step.',
+      );
+      return;
+    }
 
-    _cancelToken =
-        CancelToken();
+    final directory =
+        await getApplicationDocumentsDirectory();
+
+    final downloadDirectory = Directory(
+      '${directory.path}/MP34 Downloader',
+    );
+
+    if (!await downloadDirectory.exists()) {
+      await downloadDirectory.create(
+        recursive: true,
+      );
+    }
+
+    final videoPath =
+        '${downloadDirectory.path}/video.part';
+
+    final audioPath =
+        '${downloadDirectory.path}/audio.part';
+
+    _cancelToken = CancelToken();
 
     setState(() {
       _isDownloading = true;
-      _downloadComplete = false;
-      _progress = 0.0;
-      _savedFileName = null;
-      _errorMessage = null;
+      _progress = 0;
+      _status = 'Downloading video...';
     });
 
     try {
+      // --------------------------------------------------------
+      // VIDEO
+      // --------------------------------------------------------
 
-      final savedPath =
-          await _api.download(
-        media,
-        cancelToken:
-            _cancelToken,
-        onProgress:
-            (progress) {
+      await _api.downloadVideo(
+        media: _media!,
+        savePath: videoPath,
+        cancelToken: _cancelToken!,
+        onProgress: (received, total) {
+          if (!mounted) return;
 
-          if (!mounted) {
-            return;
+          if (total > 0) {
+            setState(() {
+              _progress =
+                  received / total * 0.75;
+            });
           }
-
-          setState(() {
-            _progress =
-                progress;
-          });
         },
       );
 
-      if (!mounted) {
+      if (_cancelToken!.isCancelled) {
         return;
       }
 
       setState(() {
-        _isDownloading = false;
-        _downloadComplete = true;
-        _progress = 1.0;
-        _savedFileName =
-            savedPath;
+        _status = 'Downloading audio...';
       });
 
-    } on DownloadCancelledException {
+      // --------------------------------------------------------
+      // AUDIO
+      // --------------------------------------------------------
 
-      if (!mounted) {
+      await _api.downloadAudio(
+        media: _media!,
+        savePath: audioPath,
+        cancelToken: _cancelToken!,
+        onProgress: (received, total) {
+          if (!mounted) return;
+
+          if (total > 0) {
+            setState(() {
+              _progress =
+                  0.75 +
+                  (received / total * 0.25);
+            });
+          }
+        },
+      );
+
+      if (_cancelToken!.isCancelled) {
         return;
       }
 
       setState(() {
-        _isDownloading = false;
-        _progress = 0.0;
+        _progress = 1;
+        _status = 'Streams downloaded';
       });
 
-    } on MediaApiException catch (
-      error
-    ) {
+      _showMessage(
+        'Video and audio downloaded successfully.',
+      );
 
-      if (!mounted) {
-        return;
+    } on DioException catch (error) {
+      if (CancelToken.isCancel(error)) {
+        _showMessage(
+          'Download cancelled.',
+        );
+      } else {
+        _showMessage(
+          'Download failed: ${error.message}',
+        );
       }
-
-      setState(() {
-        _isDownloading = false;
-        _progress = 0.0;
-        _errorMessage =
-            error.message;
-      });
-
     } catch (error) {
-
-      if (!mounted) {
-        return;
-      }
-
-      setState(() {
-        _isDownloading = false;
-        _progress = 0.0;
-        _errorMessage =
-            'Download failed: $error';
-      });
-
+      _showMessage(
+        'Download failed: $error',
+      );
     } finally {
-
-      _cancelToken = null;
+      if (mounted) {
+        setState(() {
+          _isDownloading = false;
+        });
+      }
     }
   }
 
   // ============================================================
-  // CANCEL
+  // CANCEL DOWNLOAD
   // ============================================================
 
   void _cancelDownload() {
-
     if (_cancelToken != null &&
-        !_cancelToken!
-            .isCancelled) {
-
-      _cancelToken!.cancel();
+        !_cancelToken!.isCancelled) {
+      _cancelToken!.cancel(
+        'Download cancelled.',
+      );
     }
   }
 
   // ============================================================
-  // ERROR SNACKBAR
+  // ERROR CLEANUP
   // ============================================================
 
-  void _showError(
+  String _cleanError(Object error) {
+    if (error is DioException) {
+      if (error.response?.data is Map) {
+        final data =
+            Map<String, dynamic>.from(
+          error.response!.data,
+        );
+
+        return data['detail']?.toString() ??
+            'Request failed.';
+      }
+
+      return error.message ??
+          'Something went wrong.';
+    }
+
+    return error
+        .toString()
+        .replaceFirst(
+          'Exception: ',
+          '',
+        );
+  }
+
+  // ============================================================
+  // MESSAGE
+  // ============================================================
+
+  void _showMessage(
     String message,
   ) {
+    if (!mounted) return;
 
     ScaffoldMessenger.of(context)
       ..hideCurrentSnackBar()
       ..showSnackBar(
         SnackBar(
-          content:
-              Text(message),
+          content: Text(message),
           behavior:
               SnackBarBehavior.floating,
         ),
@@ -235,320 +283,252 @@ class _HomepageState
   }
 
   // ============================================================
-  // BUILD
+  // UI
   // ============================================================
 
   @override
-  Widget build(
-    BuildContext context,
-  ) {
-
-    final theme =
-        Theme.of(context);
-
+  Widget build(BuildContext context) {
     return Scaffold(
+      backgroundColor:
+          const Color(0xFFF7F8FA),
 
       appBar: AppBar(
-        title: const Text(
-          'MP34 Downloader',
-          style: TextStyle(
-            fontWeight:
-                FontWeight.bold,
-          ),
+        elevation: 0,
+        backgroundColor: Colors.white,
+        foregroundColor:
+            const Color(0xFF171717),
+
+        title: const Row(
+          children: [
+            Icon(
+              Icons.download_rounded,
+              size: 25,
+            ),
+            SizedBox(width: 10),
+            Text(
+              'MP34 Downloader',
+              style: TextStyle(
+                fontWeight:
+                    FontWeight.w700,
+              ),
+            ),
+          ],
         ),
-        centerTitle: true,
       ),
 
       body: SafeArea(
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.all(20),
 
-        child:
-            SingleChildScrollView(
-
-          padding:
-              const EdgeInsets.all(
-            20,
-          ),
-
-          child:
-              Column(
-
+          child: Column(
             crossAxisAlignment:
-                CrossAxisAlignment
-                    .stretch,
+                CrossAxisAlignment.start,
 
             children: [
 
-              const SizedBox(
-                height: 10,
-              ),
+              const SizedBox(height: 10),
 
-              // ------------------------------------------------
-              // ICON
-              // ------------------------------------------------
-
-              Icon(
-                Icons.download_rounded,
-                size: 64,
-                color:
-                    theme.colorScheme
-                        .primary,
-              ),
-
-              const SizedBox(
-                height: 12,
-              ),
-
-              // ------------------------------------------------
-              // TITLE
-              // ------------------------------------------------
-
-              Text(
-                'Download Media',
-                textAlign:
-                    TextAlign.center,
-                style:
-                    theme.textTheme
-                        .headlineSmall
-                        ?.copyWith(
+              const Text(
+                'Download media',
+                style: TextStyle(
+                  fontSize: 27,
                   fontWeight:
-                      FontWeight.bold,
+                      FontWeight.w700,
+                  color:
+                      Color(0xFF171717),
                 ),
               ),
 
-              const SizedBox(
-                height: 6,
-              ),
+              const SizedBox(height: 6),
 
               Text(
-                'Paste a media link below to analyse and download it.',
-                textAlign:
-                    TextAlign.center,
-                style:
-                    theme.textTheme
-                        .bodyMedium
-                        ?.copyWith(
+                'Paste a video link and choose your format.',
+                style: TextStyle(
+                  fontSize: 15,
                   color:
-                      Colors.grey
-                          .shade600,
+                      Colors.grey.shade600,
                 ),
               ),
 
-              const SizedBox(
-                height: 24,
-              ),
+              const SizedBox(height: 25),
 
               // ------------------------------------------------
               // URL FIELD
               // ------------------------------------------------
 
-              TextField(
-                controller:
-                    _urlController,
-                keyboardType:
-                    TextInputType.url,
-                enabled:
-                    !_isAnalyzing &&
-                    !_isDownloading,
+              Container(
                 decoration:
-                    InputDecoration(
-                  labelText:
-                      'Media URL',
-                  hintText:
-                      'https://...',
-                  prefixIcon:
-                      const Icon(
-                    Icons.link,
+                    BoxDecoration(
+                  color: Colors.white,
+                  borderRadius:
+                      BorderRadius.circular(14),
+                  border: Border.all(
+                    color:
+                        Colors.grey.shade300,
                   ),
-                  suffixIcon:
-                      _urlController
-                              .text
-                              .isNotEmpty
-                          ? IconButton(
-                              icon:
-                                  const Icon(
-                                Icons.clear,
-                              ),
-                              onPressed:
-                                  () {
+                ),
 
-                                _urlController
-                                    .clear();
+                child: TextField(
+                  controller:
+                      _urlController,
 
-                                setState(
-                                  () {},
-                                );
-                              },
-                            )
-                          : null,
-                  border:
-                      OutlineInputBorder(
-                    borderRadius:
-                        BorderRadius
-                            .circular(
-                      16,
+                  keyboardType:
+                      TextInputType.url,
+
+                  decoration:
+                      const InputDecoration(
+                    hintText:
+                        'Paste media URL here',
+
+                    prefixIcon: Icon(
+                      Icons.link_rounded,
+                    ),
+
+                    border:
+                        InputBorder.none,
+
+                    contentPadding:
+                        EdgeInsets.symmetric(
+                      horizontal: 16,
+                      vertical: 17,
                     ),
                   ),
                 ),
-                onChanged:
-                    (_) {
-                  setState(
-                    () {},
-                  );
-                },
               ),
 
-              const SizedBox(
-                height: 14,
-              ),
+              const SizedBox(height: 14),
 
               // ------------------------------------------------
-              // ANALYZE
+              // ANALYZE BUTTON
               // ------------------------------------------------
 
               SizedBox(
+                width: double.infinity,
                 height: 52,
-                child:
-                    FilledButton.icon(
+
+                child: ElevatedButton(
                   onPressed:
-                      (_isAnalyzing ||
-                              _isDownloading)
+                      _isAnalyzing ||
+                              _isDownloading
                           ? null
                           : _analyze,
-                  icon:
-                      _isAnalyzing
-                          ? const SizedBox(
-                              width: 20,
-                              height: 20,
-                              child:
-                                  CircularProgressIndicator(
-                                strokeWidth:
-                                    2,
-                                color:
-                                    Colors.white,
-                              ),
-                            )
-                          : const Icon(
-                              Icons.search,
-                            ),
-                  label:
-                      Text(
-                    _isAnalyzing
-                        ? 'Analysing...'
-                        : 'Analyse Link',
+
+                  style:
+                      ElevatedButton.styleFrom(
+                    backgroundColor:
+                        const Color(
+                      0xFF1769E0,
+                    ),
+
+                    foregroundColor:
+                        Colors.white,
+
+                    elevation: 0,
+
+                    shape:
+                        RoundedRectangleBorder(
+                      borderRadius:
+                          BorderRadius.circular(
+                        12,
+                      ),
+                    ),
                   ),
+
+                  child: _isAnalyzing
+                      ? const SizedBox(
+                          width: 22,
+                          height: 22,
+                          child:
+                              CircularProgressIndicator(
+                            strokeWidth: 2,
+                            color:
+                                Colors.white,
+                          ),
+                        )
+                      : const Text(
+                          'Analyze',
+                          style: TextStyle(
+                            fontSize: 16,
+                            fontWeight:
+                                FontWeight.w600,
+                          ),
+                        ),
                 ),
               ),
 
-              // ------------------------------------------------
-              // ERROR
-              // ------------------------------------------------
-
-              if (_errorMessage !=
-                  null) ...[
-
-                const SizedBox(
-                  height: 18,
-                ),
-
-                Container(
-                  padding:
-                      const EdgeInsets
-                          .all(
-                    14,
-                  ),
-                  decoration:
-                      BoxDecoration(
-                    borderRadius:
-                        BorderRadius
-                            .circular(
-                      14,
-                    ),
-                    color:
-                        Colors.red
-                            .withOpacity(
-                      0.08,
-                    ),
-                    border:
-                        Border.all(
-                      color:
-                          Colors.red
-                              .withOpacity(
-                        0.3,
-                      ),
-                    ),
-                  ),
-                  child: Row(
-                    crossAxisAlignment:
-                        CrossAxisAlignment
-                            .start,
-                    children: [
-
-                      const Icon(
-                        Icons
-                            .error_outline,
-                        color:
-                            Colors.red,
-                      ),
-
-                      const SizedBox(
-                        width: 10,
-                      ),
-
-                      Expanded(
-                        child:
-                            Text(
-                          _errorMessage!,
-                          style:
-                              const TextStyle(
-                            color:
-                                Colors.red,
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ],
+              const SizedBox(height: 25),
 
               // ------------------------------------------------
               // MEDIA CARD
               // ------------------------------------------------
 
-              if (_media != null) ...[
+              if (_media != null)
+                _buildMediaCard(),
 
-                const SizedBox(
-                  height: 24,
-                ),
+              // ------------------------------------------------
+              // STATUS
+              // ------------------------------------------------
 
-                _buildMediaCard(
-                  _media!,
+              if (_status.isNotEmpty) ...[
+                const SizedBox(height: 18),
+
+                Text(
+                  _status,
+                  style: TextStyle(
+                    color:
+                        Colors.grey.shade700,
+                    fontSize: 14,
+                  ),
                 ),
               ],
 
+              const SizedBox(height: 15),
+
               // ------------------------------------------------
-              // PROGRESS
+              // DOWNLOAD PROGRESS
               // ------------------------------------------------
 
               if (_isDownloading) ...[
+                ClipRRect(
+                  borderRadius:
+                      BorderRadius.circular(
+                    10,
+                  ),
 
-                const SizedBox(
-                  height: 20,
+                  child:
+                      LinearProgressIndicator(
+                    value: _progress,
+                    minHeight: 8,
+                  ),
                 ),
 
-                _buildProgressCard(),
-              ],
+                const SizedBox(height: 10),
 
-              // ------------------------------------------------
-              // COMPLETE
-              // ------------------------------------------------
+                Row(
+                  mainAxisAlignment:
+                      MainAxisAlignment
+                          .spaceBetween,
 
-              if (_downloadComplete) ...[
+                  children: [
+                    Text(
+                      '${(_progress * 100).toStringAsFixed(0)}%',
+                      style:
+                          const TextStyle(
+                        fontWeight:
+                            FontWeight.w600,
+                      ),
+                    ),
 
-                const SizedBox(
-                  height: 20,
+                    TextButton(
+                      onPressed:
+                          _cancelDownload,
+                      child:
+                          const Text(
+                        'Cancel',
+                      ),
+                    ),
+                  ],
                 ),
-
-                _buildCompleteCard(),
               ],
             ],
           ),
@@ -561,296 +541,214 @@ class _HomepageState
   // MEDIA CARD
   // ============================================================
 
-  Widget _buildMediaCard(
-    MediaInfo media,
-  ) {
+  Widget _buildMediaCard() {
+    final media = _media!;
 
-    return Card(
-      elevation: 2,
-      clipBehavior:
-          Clip.antiAlias,
+    return Container(
+      width: double.infinity,
 
-      child:
-          Column(
+      decoration: BoxDecoration(
+        color: Colors.white,
 
-        crossAxisAlignment:
-            CrossAxisAlignment
-                .start,
+        borderRadius:
+            BorderRadius.circular(16),
 
-        children: [
-
-          if (media.thumbnail
-              .isNotEmpty)
-
-            SizedBox(
-              height: 210,
-              width:
-                  double.infinity,
-
-              child:
-                  Image.network(
-                media.thumbnail,
-                fit: BoxFit.cover,
-
-                errorBuilder:
-                    (
-                  context,
-                  error,
-                  stackTrace,
-                ) {
-
-                  return Container(
-                    color:
-                        Colors.grey
-                            .shade200,
-                    child:
-                        const Center(
-                      child:
-                          Icon(
-                        Icons
-                            .image_not_supported_outlined,
-                        size: 50,
-                      ),
-                    ),
-                  );
-                },
-
-                loadingBuilder:
-                    (
-                  context,
-                  child,
-                  loadingProgress,
-                ) {
-
-                  if (loadingProgress ==
-                      null) {
-                    return child;
-                  }
-
-                  return const Center(
-                    child:
-                        CircularProgressIndicator(),
-                  );
-                },
-              ),
-            ),
-
-          Padding(
-            padding:
-                const EdgeInsets.all(
-              16,
-            ),
-
-            child:
-                Column(
-
-              crossAxisAlignment:
-                  CrossAxisAlignment
-                      .start,
-
-              children: [
-
-                Text(
-                  media.title,
-                  maxLines: 3,
-                  overflow:
-                      TextOverflow
-                          .ellipsis,
-                  style:
-                      const TextStyle(
-                    fontSize: 18,
-                    fontWeight:
-                        FontWeight.bold,
-                  ),
-                ),
-
-                const SizedBox(
-                  height: 8,
-                ),
-
-                Row(
-                  children: [
-
-                    const Icon(
-                      Icons.public,
-                      size: 18,
-                    ),
-
-                    const SizedBox(
-                      width: 6,
-                    ),
-
-                    Text(
-                      media.platform,
-                      style:
-                          TextStyle(
-                        color:
-                            Colors.grey
-                                .shade700,
-                      ),
-                    ),
-                  ],
-                ),
-
-                const SizedBox(
-                  height: 16,
-                ),
-
-                SizedBox(
-                  width:
-                      double.infinity,
-                  height: 52,
-
-                  child:
-                      FilledButton.icon(
-                    onPressed:
-                        _isDownloading
-                            ? null
-                            : _download,
-                    icon:
-                        const Icon(
-                      Icons
-                          .download_rounded,
-                    ),
-                    label:
-                        const Text(
-                      'Download',
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  // ============================================================
-  // PROGRESS CARD
-  // ============================================================
-
-  Widget _buildProgressCard() {
-
-    final percentage =
-        (_progress * 100)
-            .clamp(0, 99.5);
-
-    final isSaving =
-        _progress >= 0.99;
-
-    return Card(
-
-      child:
-          Padding(
-
-        padding:
-            const EdgeInsets.all(
-          18,
+        border: Border.all(
+          color:
+              Colors.grey.shade200,
         ),
+      ),
 
-        child:
-            Column(
+      child: Padding(
+        padding:
+            const EdgeInsets.all(14),
 
+        child: Column(
           crossAxisAlignment:
-              CrossAxisAlignment
-                  .start,
+              CrossAxisAlignment.start,
 
           children: [
 
+            // Thumbnail
+            if (media.thumbnail.isNotEmpty)
+              ClipRRect(
+                borderRadius:
+                    BorderRadius.circular(
+                  12,
+                ),
+
+                child: Image.network(
+                  media.thumbnail,
+
+                  width: double.infinity,
+                  height: 210,
+
+                  fit: BoxFit.cover,
+
+                  errorBuilder:
+                      (
+                    context,
+                    error,
+                    stackTrace,
+                  ) {
+                    return Container(
+                      height: 210,
+                      color:
+                          Colors.grey.shade200,
+
+                      child: const Center(
+                        child: Icon(
+                          Icons
+                              .broken_image_outlined,
+                          size: 40,
+                        ),
+                      ),
+                    );
+                  },
+                ),
+              ),
+
+            const SizedBox(height: 15),
+
+            // Platform
             Row(
               children: [
+                Container(
+                  padding:
+                      const EdgeInsets
+                          .symmetric(
+                    horizontal: 10,
+                    vertical: 5,
+                  ),
 
-                Icon(
-                  isSaving
-                      ? Icons.save_rounded
-                      : Icons
-                          .downloading_rounded,
-                ),
+                  decoration:
+                      BoxDecoration(
+                    color:
+                        const Color(
+                      0xFFEFF4FF,
+                    ),
 
-                const SizedBox(
-                  width: 10,
-                ),
-
-                Expanded(
-                  child:
-                      Text(
-                    isSaving
-                        ? 'Saving...'
-                        : 'Downloading...',
-                    style:
-                        const TextStyle(
-                      fontWeight:
-                          FontWeight.bold,
-                      fontSize: 16,
+                    borderRadius:
+                        BorderRadius.circular(
+                      20,
                     ),
                   ),
-                ),
 
-                Text(
-                  '${percentage.toStringAsFixed(0)}%',
-                  style:
-                      const TextStyle(
-                    fontWeight:
-                        FontWeight.bold,
+                  child: Text(
+                    media.platform,
+                    style:
+                        const TextStyle(
+                      color:
+                          Color(0xFF1769E0),
+                      fontSize: 12,
+                      fontWeight:
+                          FontWeight.w600,
+                    ),
                   ),
                 ),
               ],
             ),
 
-            const SizedBox(
-              height: 14,
-            ),
+            const SizedBox(height: 10),
 
-            LinearProgressIndicator(
-              value: _progress,
-              minHeight: 8,
-              borderRadius:
-                  BorderRadius
-                      .circular(
-                10,
-              ),
-            ),
-
-            const SizedBox(
-              height: 14,
-            ),
-
+            // Title
             Text(
-              isSaving
-                  ? 'Saving file to your device...'
-                  : 'Downloading ${_media?.title ?? ''}',
-              maxLines: 2,
+              media.title,
+              maxLines: 3,
               overflow:
                   TextOverflow.ellipsis,
-              style:
-                  TextStyle(
-                color:
-                    Colors.grey
-                        .shade600,
+
+              style: const TextStyle(
+                fontSize: 17,
+                fontWeight:
+                    FontWeight.w600,
               ),
             ),
 
-            const SizedBox(
-              height: 16,
+            const SizedBox(height: 20),
+
+            const Text(
+              'Format',
+              style: TextStyle(
+                fontWeight:
+                    FontWeight.w600,
+                fontSize: 14,
+              ),
             ),
 
+            const SizedBox(height: 10),
+
+            // Format selection
+            Row(
+              children: [
+
+                Expanded(
+                  child:
+                      _formatButton(
+                    'MP4',
+                    Icons
+                        .video_file_outlined,
+                  ),
+                ),
+
+                const SizedBox(width: 10),
+
+                Expanded(
+                  child:
+                      _formatButton(
+                    'MP3',
+                    Icons
+                        .audio_file_outlined,
+                  ),
+                ),
+              ],
+            ),
+
+            const SizedBox(height: 18),
+
+            // Download
             SizedBox(
-              width:
-                  double.infinity,
+              width: double.infinity,
+              height: 50,
 
               child:
-                  OutlinedButton.icon(
+                  ElevatedButton.icon(
                 onPressed:
-                    _cancelDownload,
-                icon:
-                    const Icon(
+                    _isDownloading
+                        ? null
+                        : _download,
+
+                icon: const Icon(
                   Icons
-                      .cancel_outlined,
+                      .download_rounded,
                 ),
-                label:
-                    const Text(
-                  'Cancel Download',
+
+                label: Text(
+                  _selectedFormat ==
+                          'MP4'
+                      ? 'Download MP4'
+                      : 'Download MP3',
+                ),
+
+                style:
+                    ElevatedButton.styleFrom(
+                  backgroundColor:
+                      const Color(
+                    0xFF171717,
+                  ),
+
+                  foregroundColor:
+                      Colors.white,
+
+                  elevation: 0,
+
+                  shape:
+                      RoundedRectangleBorder(
+                    borderRadius:
+                        BorderRadius.circular(
+                      12,
+                    ),
+                  ),
                 ),
               ),
             ),
@@ -861,112 +759,82 @@ class _HomepageState
   }
 
   // ============================================================
-  // COMPLETE CARD
+  // FORMAT BUTTON
   // ============================================================
 
-  Widget _buildCompleteCard() {
+  Widget _formatButton(
+    String format,
+    IconData icon,
+  ) {
+    final selected =
+        _selectedFormat == format;
 
-    return Card(
+    return InkWell(
+      onTap: _isDownloading
+          ? null
+          : () {
+              setState(() {
+                _selectedFormat =
+                    format;
+              });
+            },
 
-      child:
-          Padding(
+      borderRadius:
+          BorderRadius.circular(12),
 
+      child: Container(
         padding:
-            const EdgeInsets.all(
-          18,
+            const EdgeInsets.symmetric(
+          vertical: 13,
         ),
 
-        child:
-            Column(
+        decoration: BoxDecoration(
+          color: selected
+              ? const Color(
+                  0xFFEFF4FF,
+                )
+              : Colors.white,
+
+          borderRadius:
+              BorderRadius.circular(12),
+
+          border: Border.all(
+            color: selected
+                ? const Color(
+                    0xFF1769E0,
+                  )
+                : Colors.grey.shade300,
+          ),
+        ),
+
+        child: Row(
+          mainAxisAlignment:
+              MainAxisAlignment.center,
 
           children: [
-
-            const Icon(
-              Icons
-                  .check_circle_rounded,
-              size: 58,
-              color:
-                  Colors.green,
+            Icon(
+              icon,
+              size: 20,
+              color: selected
+                  ? const Color(
+                      0xFF1769E0,
+                    )
+                  : Colors.grey.shade700,
             ),
 
-            const SizedBox(
-              height: 10,
-            ),
-
-            const Text(
-              'Download Complete',
-              style:
-                  TextStyle(
-                fontSize: 19,
-                fontWeight:
-                    FontWeight.bold,
-              ),
-            ),
-
-            const SizedBox(
-              height: 6,
-            ),
+            const SizedBox(width: 7),
 
             Text(
-              'Your media has been saved to your device.',
-              textAlign:
-                  TextAlign.center,
-              style:
-                  TextStyle(
-                color:
-                    Colors.grey
-                        .shade600,
-              ),
-            ),
+              format,
+              style: TextStyle(
+                fontWeight:
+                    FontWeight.w600,
 
-            if (_savedFileName !=
-                null) ...[
-
-              const SizedBox(
-                height: 10,
-              ),
-
-              Text(
-                _savedFileName!,
-                textAlign:
-                    TextAlign.center,
-                maxLines: 2,
-                overflow:
-                    TextOverflow
-                        .ellipsis,
-                style:
-                    const TextStyle(
-                  fontWeight:
-                      FontWeight.w500,
-                ),
-              ),
-            ],
-
-            const SizedBox(
-              height: 16,
-            ),
-
-            SizedBox(
-              width:
-                  double.infinity,
-
-              child:
-                  OutlinedButton.icon(
-                onPressed: () {
-
-                  setState(() {
-                    _downloadComplete =
-                        false;
-                  });
-                },
-                icon:
-                    const Icon(
-                  Icons.download,
-                ),
-                label:
-                    const Text(
-                  'Download Again',
-                ),
+                color: selected
+                    ? const Color(
+                        0xFF1769E0,
+                      )
+                    : Colors.grey.shade700,
               ),
             ),
           ],
