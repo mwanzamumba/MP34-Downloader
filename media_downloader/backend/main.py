@@ -93,29 +93,86 @@ async def home():
 # ANALYZE
 # ============================================================
 
-@app.post('/analyze')
+@app.post("/analyze")
 async def analyze_link(data: dict):
-    url = validate_url(str(data.get('url', '')))
-    platform = platform_for(url)
-
-    with yt_dlp.YoutubeDL({
-        'quiet': True,
-        'skip_download': True,
-        'noplaylist': True,
-    }) as downloader:
-
-        info = downloader.extract_info(
-            url,
-            download=False,
+    if not isinstance(data, dict):
+        raise HTTPException(
+            status_code=422,
+            detail="Request body must be JSON."
         )
 
-    formats = info.get("formats", [])
+    raw_url = data.get("url")
 
-    return {
-        "title": info.get("title"),
-        "format_count": len(formats),
-        "formats": formats[:3]
-    }
+    if not raw_url:
+        raise HTTPException(
+            status_code=422,
+            detail="Please provide a media URL."
+        )
+
+    url = validate_url(str(raw_url))
+
+    if yt_dlp is None:
+        raise HTTPException(
+            status_code=503,
+            detail="yt-dlp is not installed."
+        )
+
+    try:
+        options = {
+            "quiet": True,
+            "no_warnings": True,
+            "skip_download": True,
+            "noplaylist": True,
+        }
+
+        with yt_dlp.YoutubeDL(options) as downloader:
+            info = downloader.extract_info(
+                url,
+                download=False
+            )
+
+        if not info:
+            raise HTTPException(
+                status_code=422,
+                detail="Could not find media information."
+            )
+
+        formats = info.get("formats", [])
+
+        format_summary = []
+
+        for fmt in formats:
+            format_summary.append({
+                "format_id": fmt.get("format_id"),
+                "ext": fmt.get("ext"),
+                "resolution": fmt.get("resolution"),
+                "width": fmt.get("width"),
+                "height": fmt.get("height"),
+                "video_codec": fmt.get("vcodec"),
+                "audio_codec": fmt.get("acodec"),
+                "video": fmt.get("video_ext"),
+                "audio": fmt.get("audio_ext"),
+                "has_url": bool(fmt.get("url")),
+                "protocol": fmt.get("protocol"),
+            })
+
+        return {
+            "title": info.get("title") or "Untitled media",
+            "thumbnail": info.get("thumbnail") or "",
+            "platform": info.get("extractor_key") or platform_for(url),
+            "source_url": url,
+            "format_count": len(formats),
+            "formats": format_summary,
+        }
+
+    except HTTPException:
+        raise
+
+    except Exception as error:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Could not analyse this link: {error}"
+        ) from error
 
 # ============================================================
 # DOWNLOAD
