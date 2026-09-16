@@ -43,3 +43,27 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
+
+# ============================================================
+# Backend / Python
+# ============================================================
+
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Python virtual environments
+.venv/
+venv/
+env/
+
+# Environment / secret files
+.env
+.env.*
+!.env.example
+
+# YouTube authentication cookies
+cookies.json
+cookies.txt
+*.cookie
+*.cookies
