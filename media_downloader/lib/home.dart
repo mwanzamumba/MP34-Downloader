@@ -740,19 +740,6 @@ class _HomepageState extends State<Homepage> {
                   ],
                 ),
 
-                // Show uploader when available.
-                if (media.uploader != null) ...[
-                  const SizedBox(height: 5),
-                  Text(
-                    media.uploader!,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      fontSize: 12,
-                      color: Colors.grey.shade600,
-                    ),
-                  ),
-                ],
               ],
             ),
           ),
@@ -864,12 +851,14 @@ class _HomepageState extends State<Homepage> {
     }
 
     final quality = format.formatNote ??
-        format.resolution ??
-        (format.height != null
-            ? '${format.height}p'
-            : 'Video');
+      (format.height != null
+        ? '${format.height}p'
+        : 'Video');
 
-    return '${quality} • ${format.ext.toUpperCase()}';
+    final extension = format.ext;
+    return extension == null
+      ? quality
+      : '$quality • ${extension.toUpperCase()}';
   }
 
   Widget _formatCard({

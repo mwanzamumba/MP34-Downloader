@@ -4,12 +4,8 @@ class MediaInfo {
   final String platform;
   final String? thumbnail;
   final int? duration;
-  final String? uploader;
-  final String? channel;
-  final String? webpageUrl;
 
-  final bool hasVideo;
-  final bool hasAudio;
+  final List<MediaFormat> formats;
 
   final List<MediaFormat> videoFormats;
   final List<MediaFormat> audioFormats;
@@ -24,11 +20,7 @@ class MediaInfo {
     required this.platform,
     this.thumbnail,
     this.duration,
-    this.uploader,
-    this.channel,
-    this.webpageUrl,
-    required this.hasVideo,
-    required this.hasAudio,
+    required this.formats,
     required this.videoFormats,
     required this.audioFormats,
     required this.progressiveFormats,
@@ -36,149 +28,218 @@ class MediaInfo {
     this.recommendedAudio,
   });
 
-  factory MediaInfo.fromJson(
-    Map<String, dynamic> json,
-  ) {
+  factory MediaInfo.fromJson(Map<String, dynamic> json) {
+    final List<MediaFormat> parsedFormats = [];
+
+    final dynamic formatsJson = json['formats'];
+
+    if (formatsJson is List) {
+      for (final item in formatsJson) {
+        if (item is Map<String, dynamic>) {
+          parsedFormats.add(
+            MediaFormat.fromJson(item),
+          );
+        } else if (item is Map) {
+          parsedFormats.add(
+            MediaFormat.fromJson(
+              Map<String, dynamic>.from(item),
+            ),
+          );
+        }
+      }
+    }
+
+    final List<MediaFormat> parsedVideoFormats =
+        parsedFormats.where((format) {
+      return format.hasVideo;
+    }).toList();
+
+    final List<MediaFormat> parsedAudioFormats =
+        parsedFormats.where((format) {
+      return format.hasAudio && !format.hasVideo;
+    }).toList();
+
+    final List<MediaFormat> parsedProgressiveFormats =
+        parsedFormats.where((format) {
+      return format.hasVideo && format.hasAudio;
+    }).toList();
+
+    MediaFormat? recommendedVideo;
+
+    MediaFormat? recommendedAudio;
+
+    /*
+     * Try to read recommendations from the backend.
+     */
+    if (json['recommended_video'] is Map) {
+      recommendedVideo = MediaFormat.fromJson(
+        Map<String, dynamic>.from(
+          json['recommended_video'],
+        ),
+      );
+    }
+
+    if (json['recommended_audio'] is Map) {
+      recommendedAudio = MediaFormat.fromJson(
+        Map<String, dynamic>.from(
+          json['recommended_audio'],
+        ),
+      );
+    }
+
+    /*
+     * If backend did not provide recommended video,
+     * choose one locally.
+     */
+    if (recommendedVideo == null) {
+      if (parsedProgressiveFormats.isNotEmpty) {
+        recommendedVideo = _bestVideo(
+          parsedProgressiveFormats,
+        );
+      } else if (parsedVideoFormats.isNotEmpty) {
+        recommendedVideo = _bestVideo(
+          parsedVideoFormats,
+        );
+      }
+    }
+
+    /*
+     * If backend did not provide recommended audio,
+     * choose one locally.
+     */
+    if (recommendedAudio == null) {
+      if (parsedAudioFormats.isNotEmpty) {
+        recommendedAudio = _bestAudio(
+          parsedAudioFormats,
+        );
+      } else if (parsedProgressiveFormats.isNotEmpty) {
+        recommendedAudio = _bestAudio(
+          parsedProgressiveFormats,
+        );
+      }
+    }
+
+    /*
+     * Duration can come as int, double or null.
+     */
+    int? parsedDuration;
+
+    final dynamic durationValue = json['duration'];
+
+    if (durationValue is num) {
+      parsedDuration = durationValue.toInt();
+    } else if (durationValue != null) {
+      parsedDuration = int.tryParse(
+        durationValue.toString(),
+      );
+    }
+
     return MediaInfo(
       success: json['success'] == true,
-
-      title:
-          json['title']?.toString() ??
-          'Unknown title',
-
-      platform:
-          json['platform']?.toString() ??
-          'Unknown',
-
-      thumbnail:
-          json['thumbnail']?.toString(),
-
-      duration:
-          json['duration'] is num
-              ? (json['duration'] as num).toInt()
-              : null,
-
-      uploader:
-          json['uploader']?.toString(),
-
-      channel:
-          json['channel']?.toString(),
-
-      webpageUrl:
-          json['webpage_url']?.toString(),
-
-      hasVideo:
-          json['has_video'] == true,
-
-      hasAudio:
-          json['has_audio'] == true,
-
-      videoFormats:
-          _parseFormats(
-        json['video_formats'],
-      ),
-
-      audioFormats:
-          _parseFormats(
-        json['audio_formats'],
-      ),
-
-      progressiveFormats:
-          _parseFormats(
-        json['progressive_formats'],
-      ),
-
-      recommendedVideo:
-          _parseSingleFormat(
-        json['recommended_video'],
-      ),
-
-      recommendedAudio:
-          _parseSingleFormat(
-        json['recommended_audio'],
-      ),
+      title: json['title']?.toString() ?? 'Unknown title',
+      platform: json['platform']?.toString() ?? 'Unknown',
+      thumbnail: json['thumbnail']?.toString(),
+      duration: parsedDuration,
+      formats: parsedFormats,
+      videoFormats: parsedVideoFormats,
+      audioFormats: parsedAudioFormats,
+      progressiveFormats: parsedProgressiveFormats,
+      recommendedVideo: recommendedVideo,
+      recommendedAudio: recommendedAudio,
     );
   }
 
-  // ==========================================================
-  // JSON FORMAT HELPERS
-  // ==========================================================
+  // ============================================================
+  // COMPATIBILITY GETTERS
+  // ============================================================
 
-  static List<MediaFormat> _parseFormats(
-    dynamic value,
-  ) {
-    if (value is! List) {
-      return [];
-    }
-
-    return value
-        .whereType<Map>()
-        .map(
-          (item) => MediaFormat.fromJson(
-            Map<String, dynamic>.from(item),
-          ),
-        )
-        .toList();
+  /*
+   * This fixes:
+   *
+   * NoSuchMethodError:
+   * Class 'MediaInfo' has no instance getter 'video'
+   */
+  MediaFormat? get video {
+    return getVideo();
   }
 
-  static MediaFormat? _parseSingleFormat(
-    dynamic value,
-  ) {
-    if (value is! Map) {
-      return null;
-    }
-
-    return MediaFormat.fromJson(
-      Map<String, dynamic>.from(value),
-    );
+  /*
+   * Compatibility getter for old UI/business logic.
+   */
+  MediaFormat? get audio {
+    return getAudio();
   }
 
-  // ==========================================================
-  // COMPATIBILITY METHODS
-  // ==========================================================
-  //
-  // These methods allow your existing HomePage/download logic
-  // to continue working without changing the UI.
-  //
+  // ============================================================
+  // VIDEO
+  // ============================================================
 
   MediaFormat? getVideo() {
-    // First use backend recommendation.
+    /*
+     * First use backend recommendation.
+     */
     if (recommendedVideo != null) {
       return recommendedVideo;
     }
 
-    // Next prefer a progressive format because it already
-    // contains video + audio.
+    /*
+     * Prefer progressive formats because they contain
+     * both video and audio.
+     */
     if (progressiveFormats.isNotEmpty) {
-      return progressiveFormats.first;
+      return _bestVideo(
+        progressiveFormats,
+      );
     }
 
-    // Finally use a video-only format.
+    /*
+     * Otherwise use video-only formats.
+     */
     if (videoFormats.isNotEmpty) {
-      return videoFormats.first;
+      return _bestVideo(
+        videoFormats,
+      );
     }
 
     return null;
   }
 
+  // ============================================================
+  // AUDIO
+  // ============================================================
+
   MediaFormat? getAudio() {
-    // First use backend recommendation.
+    /*
+     * First use backend recommendation.
+     */
     if (recommendedAudio != null) {
       return recommendedAudio;
     }
 
-    // Prefer a real audio-only format.
+    /*
+     * Prefer audio-only formats.
+     */
     if (audioFormats.isNotEmpty) {
-      return audioFormats.first;
+      return _bestAudio(
+        audioFormats,
+      );
     }
 
-    // A progressive format also contains audio.
+    /*
+     * Fall back to progressive formats.
+     */
     if (progressiveFormats.isNotEmpty) {
-      return progressiveFormats.first;
+      return _bestAudio(
+        progressiveFormats,
+      );
     }
 
     return null;
   }
+
+  // ============================================================
+  // OTHER COMPATIBILITY METHODS
+  // ============================================================
 
   MediaFormat? getBestVideo() {
     return getVideo();
@@ -187,207 +248,340 @@ class MediaInfo {
   MediaFormat? getBestAudio() {
     return getAudio();
   }
+
+  // ============================================================
+  // BEST VIDEO FORMAT
+  // ============================================================
+
+  static MediaFormat? _bestVideo(
+    List<MediaFormat> formats,
+  ) {
+    if (formats.isEmpty) {
+      return null;
+    }
+
+    final List<MediaFormat> sorted =
+        List<MediaFormat>.from(formats);
+
+    sorted.sort(
+      (a, b) {
+        final int heightA = a.height ?? 0;
+        final int heightB = b.height ?? 0;
+
+        return heightB.compareTo(heightA);
+      },
+    );
+
+    return sorted.first;
+  }
+
+  // ============================================================
+  // BEST AUDIO FORMAT
+  // ============================================================
+
+  static MediaFormat? _bestAudio(
+    List<MediaFormat> formats,
+  ) {
+    if (formats.isEmpty) {
+      return null;
+    }
+
+    final List<MediaFormat> sorted =
+        List<MediaFormat>.from(formats);
+
+    sorted.sort(
+      (a, b) {
+        final int bitrateA =
+            a.audioBitrate ?? 0;
+
+        final int bitrateB =
+            b.audioBitrate ?? 0;
+
+        return bitrateB.compareTo(
+          bitrateA,
+        );
+      },
+    );
+
+    return sorted.first;
+  }
 }
 
 
-// ============================================================
+// ================================================================
 // MEDIA FORMAT
-// ============================================================
+// ================================================================
 
 class MediaFormat {
   final String formatId;
-  final String ext;
-  final String? resolution;
+  final String? ext;
+
+  final String? formatNote;
 
   final int? width;
   final int? height;
-  final double? fps;
 
-  final int? filesize;
+  final double? fps;
 
   final String? vcodec;
   final String? acodec;
 
-  final double? abr;
-  final double? vbr;
+  final int? filesize;
+  final int? filesizeApprox;
 
-  final String? formatNote;
-  final String? protocol;
-  final String? formatType;
+  final int? audioBitrate;
+
+  final String? url;
+
+  final bool hasVideo;
+  final bool hasAudio;
 
   MediaFormat({
     required this.formatId,
-    required this.ext,
-    this.resolution,
+    this.ext,
+    this.formatNote,
     this.width,
     this.height,
     this.fps,
-    this.filesize,
     this.vcodec,
     this.acodec,
-    this.abr,
-    this.vbr,
-    this.formatNote,
-    this.protocol,
-    this.formatType,
+    this.filesize,
+    this.filesizeApprox,
+    this.audioBitrate,
+    this.url,
+    required this.hasVideo,
+    required this.hasAudio,
   });
 
   factory MediaFormat.fromJson(
     Map<String, dynamic> json,
   ) {
+    final String? parsedVcodec =
+        _nullableString(
+      json['vcodec'],
+    );
+
+    final String? parsedAcodec =
+        _nullableString(
+      json['acodec'],
+    );
+
+    /*
+     * Determine whether the format contains video.
+     */
+    final bool parsedHasVideo =
+        json['has_video'] == true ||
+        (
+          parsedVcodec != null &&
+          parsedVcodec.isNotEmpty &&
+          parsedVcodec != 'none'
+        );
+
+    /*
+     * Determine whether the format contains audio.
+     */
+    final bool parsedHasAudio =
+        json['has_audio'] == true ||
+        (
+          parsedAcodec != null &&
+          parsedAcodec.isNotEmpty &&
+          parsedAcodec != 'none'
+        );
+
     return MediaFormat(
       formatId:
-          json['format_id']?.toString() ??
-          '',
+          json['format_id']?.toString() ?? '',
 
       ext:
-          json['ext']?.toString() ??
-          '',
-
-      resolution:
-          json['resolution']?.toString(),
-
-      width:
-          json['width'] is num
-              ? (json['width'] as num).toInt()
-              : null,
-
-      height:
-          json['height'] is num
-              ? (json['height'] as num).toInt()
-              : null,
-
-      fps:
-          json['fps'] is num
-              ? (json['fps'] as num).toDouble()
-              : null,
-
-      filesize:
-          json['filesize'] is num
-              ? (json['filesize'] as num).toInt()
-              : null,
-
-      vcodec:
-          json['vcodec']?.toString(),
-
-      acodec:
-          json['acodec']?.toString(),
-
-      abr:
-          json['abr'] is num
-              ? (json['abr'] as num).toDouble()
-              : null,
-
-      vbr:
-          json['vbr'] is num
-              ? (json['vbr'] as num).toDouble()
-              : null,
+          _nullableString(
+        json['ext'],
+      ),
 
       formatNote:
-          json['format_note']?.toString(),
+          _nullableString(
+        json['format_note'],
+      ),
 
-      protocol:
-          json['protocol']?.toString(),
+      width:
+          _toInt(
+        json['width'],
+      ),
 
-      formatType:
-          json['format_type']?.toString(),
+      height:
+          _toInt(
+        json['height'],
+      ),
+
+      fps:
+          _toDouble(
+        json['fps'],
+      ),
+
+      vcodec:
+          parsedVcodec,
+
+      acodec:
+          parsedAcodec,
+
+      filesize:
+          _toInt(
+        json['filesize'],
+      ),
+
+      filesizeApprox:
+          _toInt(
+        json['filesize_approx'],
+      ),
+
+      audioBitrate:
+          _toInt(
+        json['abr'],
+      ),
+
+      url:
+          _nullableString(
+        json['url'],
+      ),
+
+      hasVideo:
+          parsedHasVideo,
+
+      hasAudio:
+          parsedHasAudio,
     );
   }
 
-  // ==========================================================
-  // VIDEO
-  // ==========================================================
+  // ============================================================
+  // FILE SIZE
+  // ============================================================
 
-  bool get hasVideo {
-    return vcodec != null &&
-        vcodec!.isNotEmpty &&
-        vcodec != 'none';
+  int? get effectiveFilesize {
+    return filesize ?? filesizeApprox;
   }
 
-  // ==========================================================
-  // AUDIO
-  // ==========================================================
-
-  bool get hasAudio {
-    return acodec != null &&
-        acodec!.isNotEmpty &&
-        acodec != 'none';
-  }
-
-  // ==========================================================
-  // PROGRESSIVE
-  // ==========================================================
-
-  bool get isProgressive {
-    return hasVideo && hasAudio;
-  }
-
-  // ==========================================================
-  // DISPLAY RESOLUTION
-  // ==========================================================
-
-  String get displayResolution {
-    if (
-      formatNote != null &&
-      formatNote!.isNotEmpty
-    ) {
-      return formatNote!;
-    }
-
-    if (
-      resolution != null &&
-      resolution!.isNotEmpty
-    ) {
-      return resolution!;
-    }
-
-    if (height != null) {
-      return '${height}p';
-    }
-
-    return 'Unknown quality';
-  }
-
-  // ==========================================================
+  // ============================================================
   // DISPLAY SIZE
-  // ==========================================================
+  // ============================================================
 
-  String get displaySize {
-    if (
-      filesize == null ||
-      filesize! <= 0
-    ) {
-      return 'Unknown size';
+  String get sizeLabel {
+    final int? size = effectiveFilesize;
+
+    if (size == null || size <= 0) {
+      return 'Size unknown';
     }
 
     final double mb =
-        filesize! /
-        (1024 * 1024);
+        size / (1024 * 1024);
 
-    if (mb >= 1024) {
-      return '${(mb / 1024).toStringAsFixed(1)} GB';
+    if (mb < 1024) {
+      return '${mb.toStringAsFixed(1)} MB';
     }
 
-    return '${mb.toStringAsFixed(1)} MB';
+    final double gb =
+        mb / 1024;
+
+    return '${gb.toStringAsFixed(2)} GB';
   }
 
-  // ==========================================================
-  // DISPLAY TYPE
-  // ==========================================================
+  // ============================================================
+  // RESOLUTION
+  // ============================================================
 
-  String get displayType {
-    if (isProgressive) {
+  String get resolutionLabel {
+    if (height != null && height! > 0) {
+      return '${height}p';
+    }
+
+    if (width != null &&
+        width! > 0 &&
+        height != null &&
+        height! > 0) {
+      return '${width}x$height';
+    }
+
+    return 'Unknown';
+  }
+
+  // ============================================================
+  // FORMAT TYPE
+  // ============================================================
+
+  String get typeLabel {
+    if (hasVideo && hasAudio) {
       return 'Video + Audio';
     }
 
     if (hasVideo) {
-      return 'Video only';
+      return 'Video';
     }
 
     if (hasAudio) {
-      return 'Audio only';
+      return 'Audio';
     }
 
     return 'Unknown';
+  }
+
+  // ============================================================
+  // HELPERS
+  // ============================================================
+
+  static String? _nullableString(
+    dynamic value,
+  ) {
+    if (value == null) {
+      return null;
+    }
+
+    final String text =
+        value.toString().trim();
+
+    if (text.isEmpty ||
+        text == 'null' ||
+        text == 'none') {
+      return null;
+    }
+
+    return text;
+  }
+
+  static int? _toInt(
+    dynamic value,
+  ) {
+    if (value == null) {
+      return null;
+    }
+
+    if (value is int) {
+      return value;
+    }
+
+    if (value is num) {
+      return value.toInt();
+    }
+
+    return int.tryParse(
+      value.toString(),
+    );
+  }
+
+  static double? _toDouble(
+    dynamic value,
+  ) {
+    if (value == null) {
+      return null;
+    }
+
+    if (value is double) {
+      return value;
+    }
+
+    if (value is num) {
+      return value.toDouble();
+    }
+
+    return double.tryParse(
+      value.toString(),
+    );
   }
 }

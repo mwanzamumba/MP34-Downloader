@@ -1,33 +1,29 @@
 import os
 import re
+import time
 import uuid
 import shutil
-import tempfile
-import subprocess
-import time
-
+import logging
 from pathlib import Path
-from typing import Optional
+from urllib.parse import urlparse, parse_qs
+
+from fastapi import FastAPI, HTTPException
+from fastapi.responses import FileResponse
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
 
 import yt_dlp
 
-from fastapi import FastAPI, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
-
-from pydantic import BaseModel
-
 
 # ============================================================
-# APPLICATION CONFIGURATION
+# APP CONFIGURATION
 # ============================================================
 
-APP_VERSION = "3.2.0"
+APP_VERSION = "3.3.0"
 
 BASE_DIR = Path(__file__).resolve().parent
 
 DOWNLOAD_DIR = BASE_DIR / "downloads"
-
 DOWNLOAD_DIR.mkdir(
     parents=True,
     exist_ok=True,
@@ -42,28 +38,46 @@ FILE_TTL = int(
 
 YOUTUBE_COOKIES = os.getenv(
     "YOUTUBE_COOKIES",
-    "",
-).strip()
+    ""
+)
 
 
 # ============================================================
-# FASTAPI APPLICATION
+# LOGGING
+# ============================================================
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s | %(levelname)s | %(message)s",
+)
+
+logger = logging.getLogger(
+    "mp34-downloader"
+)
+
+
+# ============================================================
+# FASTAPI
 # ============================================================
 
 app = FastAPI(
     title="Media Downloader API",
-    description=(
-        "Media downloader API using "
-        "FastAPI and yt-dlp"
-    ),
     version=APP_VERSION,
+    description=(
+        "Media analysis and download API "
+        "powered by yt-dlp."
+    ),
 )
 
+
+# ============================================================
+# CORS
+# ============================================================
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_credentials=False,
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -79,9 +93,9 @@ class AnalyzeRequest(BaseModel):
 
 class DownloadRequest(BaseModel):
     url: str
-    format_id: Optional[str] = None
+    format_id: str
     media_type: str = "video"
-    audio_format: Optional[str] = "mp3"
+    audio_format: str | None = None
 
 
 # ============================================================
@@ -90,30 +104,42 @@ class DownloadRequest(BaseModel):
 
 def detect_platform(url: str) -> str:
 
-    value = url.lower()
+    try:
+        hostname = (
+            urlparse(url)
+            .hostname
+            or ""
+        ).lower()
+
+    except Exception:
+        return "Unknown"
 
     if (
-        "youtube.com" in value
-        or "youtu.be" in value
-        or "youtube-nocookie.com" in value
+        "youtube.com" in hostname
+        or hostname == "youtu.be"
     ):
         return "YouTube"
 
     if (
-        "facebook.com" in value
-        or "fb.watch" in value
+        "tiktok.com" in hostname
     ):
-        return "Facebook"
-
-    if "instagram.com" in value:
-        return "Instagram"
-
-    if "tiktok.com" in value:
         return "TikTok"
 
     if (
-        "twitter.com" in value
-        or "x.com" in value
+        "instagram.com" in hostname
+        or "instagr.am" in hostname
+    ):
+        return "Instagram"
+
+    if (
+        "facebook.com" in hostname
+        or hostname == "fb.watch"
+    ):
+        return "Facebook"
+
+    if (
+        "twitter.com" in hostname
+        or "x.com" in hostname
     ):
         return "X"
 
@@ -121,393 +147,89 @@ def detect_platform(url: str) -> str:
 
 
 # ============================================================
-# SYSTEM CHECKS
+# YOUTUBE URL NORMALIZATION
 # ============================================================
 
-def executable_available(
-    name: str,
-) -> bool:
+def normalize_youtube_url(
+    url: str,
+) -> str:
+    """
+    Convert YouTube URLs into a clean single-video URL.
 
-    return shutil.which(name) is not None
+    Example:
 
+    Input:
+    https://www.youtube.com/watch?v=ABC123&list=RDXYZ&feature=youtu.be
 
-def node_available() -> bool:
+    Output:
+    https://www.youtube.com/watch?v=ABC123
 
-    return executable_available(
-        "node"
-    )
-
-
-def ffmpeg_available() -> bool:
-
-    return executable_available(
-        "ffmpeg"
-    )
-
-
-def ffprobe_available() -> bool:
-
-    return executable_available(
-        "ffprobe"
-    )
-
-
-# ============================================================
-# COOKIE MANAGEMENT
-# ============================================================
-
-def create_cookie_file() -> Optional[str]:
-
-    if not YOUTUBE_COOKIES:
-        return None
-
-    temp_file = tempfile.NamedTemporaryFile(
-        mode="w",
-        suffix=".txt",
-        delete=False,
-        encoding="utf-8",
-    )
+    This is important because YouTube Mix/playlist URLs
+    can cause yt-dlp to invoke the youtube:tab extractor,
+    which can result in HTTP 403 errors.
+    """
 
     try:
+        parsed = urlparse(url)
 
-        temp_file.write(
-            YOUTUBE_COOKIES
-        )
+        hostname = (
+            parsed.hostname
+            or ""
+        ).lower()
 
-        temp_file.flush()
+        # ----------------------------------------------------
+        # youtu.be
+        # ----------------------------------------------------
 
-        return temp_file.name
+        if hostname == "youtu.be":
 
-    finally:
-
-        temp_file.close()
-
-
-def remove_cookie_file(
-    cookie_file: Optional[str],
-):
-
-    if not cookie_file:
-        return
-
-    try:
-
-        if os.path.exists(
-            cookie_file
-        ):
-
-            os.remove(
-                cookie_file
+            video_id = (
+                parsed.path
+                .strip("/")
             )
 
-    except Exception:
+            if video_id:
 
-        pass
-
-
-# ============================================================
-# YT-DLP OPTIONS
-# ============================================================
-
-def get_ytdlp_options(
-    skip_download: bool = True,
-    cookie_file: Optional[str] = None,
-):
-
-    options = {
-
-        "ignoreconfig": True,
-
-        "noplaylist": True,
-
-        "socket_timeout": 60,
-
-        "retries": 5,
-
-        "fragment_retries": 5,
-
-        "file_access_retries": 3,
-
-        "js_runtimes": {
-            "node": {}
-        },
-
-        "skip_download":
-            skip_download,
-
-        "continuedl": True,
-
-        "overwrites": True,
-    }
-
-    # --------------------------------------------------------
-    # YouTube
-    # --------------------------------------------------------
-
-    if cookie_file:
-
-        options["cookiefile"] = (
-            cookie_file
-        )
-
-        options["extractor_args"] = {
-
-            "youtube": {
-
-                "player_client": [
-                    "default",
-                    "web_embedded",
-                ]
-            }
-        }
-
-    return options
-
-
-# ============================================================
-# FORMAT HELPERS
-# ============================================================
-
-def has_video(
-    fmt: dict,
-) -> bool:
-
-    codec = fmt.get(
-        "vcodec"
-    )
-
-    return (
-        codec is not None
-        and codec != "none"
-    )
-
-
-def has_audio(
-    fmt: dict,
-) -> bool:
-
-    codec = fmt.get(
-        "acodec"
-    )
-
-    return (
-        codec is not None
-        and codec != "none"
-    )
-
-
-def is_progressive(
-    fmt: dict,
-) -> bool:
-
-    return (
-        has_video(fmt)
-        and has_audio(fmt)
-    )
-
-
-def safe_int(
-    value,
-):
-
-    try:
-
-        if value is None:
-            return None
-
-        return int(value)
-
-    except Exception:
-
-        return None
-
-
-def safe_float(
-    value,
-):
-
-    try:
-
-        if value is None:
-            return None
-
-        return float(value)
-
-    except Exception:
-
-        return None
-
-
-# ============================================================
-# PUBLIC FORMAT OBJECT
-# ============================================================
-
-def format_to_public(
-    fmt: dict,
-    format_type: str,
-) -> dict:
-
-    width = safe_int(
-        fmt.get("width")
-    )
-
-    height = safe_int(
-        fmt.get("height")
-    )
-
-    if width and height:
-
-        resolution = (
-            f"{width}x{height}"
-        )
-
-    else:
-
-        resolution = (
-            fmt.get("resolution")
-        )
-
-    return {
-
-        "format_id":
-            str(
-                fmt.get(
-                    "format_id",
-                    "",
+                return (
+                    "https://www.youtube.com/"
+                    f"watch?v={video_id}"
                 )
-            ),
 
-        "ext":
-            fmt.get("ext"),
+            return url
 
-        "resolution":
-            resolution,
-
-        "width":
-            width,
-
-        "height":
-            height,
-
-        "fps":
-            safe_float(
-                fmt.get("fps")
-            ),
-
-        "filesize":
-            safe_int(
-                fmt.get("filesize")
-                or
-                fmt.get(
-                    "filesize_approx"
-                )
-            ),
-
-        "vcodec":
-            fmt.get("vcodec"),
-
-        "acodec":
-            fmt.get("acodec"),
-
-        "abr":
-            safe_float(
-                fmt.get("abr")
-            ),
-
-        "vbr":
-            safe_float(
-                fmt.get("vbr")
-            ),
-
-        "format_note":
-            fmt.get(
-                "format_note"
-            ),
-
-        "protocol":
-            fmt.get(
-                "protocol"
-            ),
-
-        "format_type":
-            format_type,
-    }
-
-
-# ============================================================
-# FORMAT COLLECTION
-# ============================================================
-
-def collect_formats(
-    info: dict,
-):
-
-    formats = (
-        info.get(
-            "formats"
-        )
-        or []
-    )
-
-    video_formats = []
-
-    audio_formats = []
-
-    progressive_formats = []
-
-    for fmt in formats:
-
-        format_id = str(
-            fmt.get(
-                "format_id",
-                "",
-            )
-        )
-
-        # Skip storyboard formats.
-        if format_id.startswith(
-            "sb"
-        ):
-            continue
+        # ----------------------------------------------------
+        # YouTube domains
+        # ----------------------------------------------------
 
         if (
-            not has_video(fmt)
-            and not has_audio(fmt)
+            "youtube.com" in hostname
+            or "youtube-nocookie.com" in hostname
         ):
-            continue
 
-        if is_progressive(fmt):
-
-            progressive_formats.append(
-                format_to_public(
-                    fmt,
-                    "progressive",
-                )
+            query = parse_qs(
+                parsed.query
             )
 
-        elif has_video(fmt):
+            video_id = query.get(
+                "v",
+                [None],
+            )[0]
 
-            video_formats.append(
-                format_to_public(
-                    fmt,
-                    "video",
+            if video_id:
+
+                return (
+                    "https://www.youtube.com/"
+                    f"watch?v={video_id}"
                 )
-            )
 
-        elif has_audio(fmt):
+    except Exception as exc:
 
-            audio_formats.append(
-                format_to_public(
-                    fmt,
-                    "audio",
-                )
-            )
+        logger.warning(
+            "[YOUTUBE] URL normalization failed: %s",
+            exc,
+        )
 
-    return (
-        video_formats,
-        audio_formats,
-        progressive_formats,
-    )
+    return url
 
 
 # ============================================================
@@ -541,64 +263,573 @@ def validate_url(
             ),
         )
 
+    platform = detect_platform(
+        url
+    )
+
+    logger.info(
+        "[URL] Platform detected: %s",
+        platform,
+    )
+
+    # --------------------------------------------------------
+    # Normalize YouTube URLs
+    # --------------------------------------------------------
+
+    if platform == "YouTube":
+
+        original_url = url
+
+        url = normalize_youtube_url(
+            url
+        )
+
+        if url != original_url:
+
+            logger.info(
+                "[YOUTUBE] URL normalized successfully."
+            )
+
+            logger.info(
+                "[YOUTUBE] Playlist/mix parameters removed."
+            )
+
     return url
 
 
 # ============================================================
-# ERROR CLEANING
+# COOKIE FILE
 # ============================================================
 
-def clean_error(
-    error: Exception,
-) -> str:
+def create_cookie_file():
+    """
+    Creates a temporary Netscape cookie file from the
+    YOUTUBE_COOKIES environment variable.
 
-    message = str(
-        error
-    ).strip()
+    Cookie contents are never logged.
+    """
 
-    if not message:
+    if not YOUTUBE_COOKIES.strip():
 
-        return (
-            "Unknown yt-dlp error."
+        return None
+
+    cookie_file = (
+        DOWNLOAD_DIR
+        / f".youtube_cookies_{uuid.uuid4().hex}.txt"
+    )
+
+    try:
+
+        cookie_file.write_text(
+            YOUTUBE_COOKIES,
+            encoding="utf-8",
         )
 
-    return message
+        return cookie_file
+
+    except Exception as exc:
+
+        logger.error(
+            "[COOKIES] Failed to create cookie file: %s",
+            exc,
+        )
+
+        return None
 
 
 # ============================================================
-# EXTRACT MEDIA INFORMATION
+# YT-DLP OPTIONS
 # ============================================================
 
-def extract_media_info(
-    url: str,
+def get_ytdlp_options(
+    *,
+    download: bool = False,
+    output_template: str | None = None,
 ):
+
+    options = {
+
+        # ----------------------------------------------------
+        # Do not download playlists.
+        # ----------------------------------------------------
+
+        "noplaylist": True,
+
+        # ----------------------------------------------------
+        # Quiet output is disabled because we want useful
+        # logging in Render.
+        # ----------------------------------------------------
+
+        "quiet": False,
+        "no_warnings": False,
+
+        # ----------------------------------------------------
+        # Retry configuration
+        # ----------------------------------------------------
+
+        "retries": 3,
+        "fragment_retries": 3,
+
+        # ----------------------------------------------------
+        # Continue/resume
+        # ----------------------------------------------------
+
+        "continuedl": True,
+        "overwrites": True,
+
+        # ----------------------------------------------------
+        # Network
+        # ----------------------------------------------------
+
+        "socket_timeout": 30,
+
+        # ----------------------------------------------------
+        # Extractor configuration
+        #
+        # default + web_embedded gives yt-dlp alternatives
+        # when YouTube blocks one client.
+        # ----------------------------------------------------
+
+        "extractor_args": {
+            "youtube": {
+                "player_client": [
+                    "default",
+                    "web_embedded",
+                ]
+            }
+        },
+
+        # ----------------------------------------------------
+        # User agent
+        # ----------------------------------------------------
+
+        "http_headers": {
+            "User-Agent": (
+                "Mozilla/5.0 "
+                "(Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 "
+                "(KHTML, like Gecko) "
+                "Chrome/153.0.0.0 "
+                "Safari/537.36"
+            ),
+            "Accept-Language": (
+                "en-US,en;q=0.9"
+            ),
+        },
+
+        # ----------------------------------------------------
+        # Download settings
+        # ----------------------------------------------------
+
+        "restrictfilenames": True,
+
+    }
+
+    # ========================================================
+    # COOKIES
+    # ========================================================
+
+    cookie_file = create_cookie_file()
+
+    if cookie_file:
+
+        options[
+            "cookiefile"
+        ] = str(cookie_file)
+
+        logger.info(
+            "[YOUTUBE] Cookie authentication enabled."
+        )
+
+    # ========================================================
+    # ACTUAL DOWNLOAD
+    # ========================================================
+
+    if download:
+
+        options.update({
+
+            "format": "best",
+
+            "merge_output_format": "mp4",
+
+        })
+
+        if output_template:
+
+            options[
+                "outtmpl"
+            ] = output_template
+
+    return options
+
+
+# ============================================================
+# SAFE INTEGER
+# ============================================================
+
+def safe_int(
+    value,
+):
+    try:
+
+        if value is None:
+            return None
+
+        if isinstance(
+            value,
+            bool,
+        ):
+            return None
+
+        return int(
+            float(value)
+        )
+
+    except (
+        TypeError,
+        ValueError,
+    ):
+
+        return None
+
+
+# ============================================================
+# SAFE STRING
+# ============================================================
+
+def safe_string(
+    value,
+):
+
+    if value is None:
+        return None
+
+    value = str(
+        value
+    ).strip()
+
+    if not value:
+        return None
+
+    return value
+
+
+# ============================================================
+# FORMAT CONVERSION
+# ============================================================
+
+def format_to_public(
+    fmt: dict,
+) -> dict:
+
+    vcodec = safe_string(
+        fmt.get("vcodec")
+    )
+
+    acodec = safe_string(
+        fmt.get("acodec")
+    )
+
+    has_video = (
+        vcodec is not None
+        and vcodec != "none"
+    )
+
+    has_audio = (
+        acodec is not None
+        and acodec != "none"
+    )
+
+    return {
+
+        "format_id":
+            safe_string(
+                fmt.get("format_id")
+            ) or "",
+
+        "ext":
+            safe_string(
+                fmt.get("ext")
+            ),
+
+        "format_note":
+            safe_string(
+                fmt.get("format_note")
+            ),
+
+        "width":
+            safe_int(
+                fmt.get("width")
+            ),
+
+        "height":
+            safe_int(
+                fmt.get("height")
+            ),
+
+        "fps":
+            fmt.get("fps"),
+
+        "vcodec":
+            vcodec,
+
+        "acodec":
+            acodec,
+
+        "filesize":
+            safe_int(
+                fmt.get("filesize")
+                or fmt.get(
+                    "filesize_approx"
+                )
+            ),
+
+        "filesize_approx":
+            safe_int(
+                fmt.get(
+                    "filesize_approx"
+                )
+            ),
+
+        "abr":
+            safe_int(
+                fmt.get("abr")
+            ),
+
+        "url":
+            safe_string(
+                fmt.get("url")
+            ),
+
+        "has_video":
+            has_video,
+
+        "has_audio":
+            has_audio,
+    }
+
+
+# ============================================================
+# FORMAT SELECTION
+# ============================================================
+
+def select_recommended_video(
+    formats: list[dict],
+):
+
+    progressive = [
+        f
+        for f in formats
+        if f.get("has_video")
+        and f.get("has_audio")
+    ]
+
+    video_only = [
+        f
+        for f in formats
+        if f.get("has_video")
+    ]
+
+    candidates = (
+        progressive
+        if progressive
+        else video_only
+    )
+
+    if not candidates:
+        return None
+
+    candidates.sort(
+        key=lambda x: (
+            x.get("height")
+            or 0,
+            x.get("filesize")
+            or 0,
+        ),
+        reverse=True,
+    )
+
+    return candidates[0]
+
+
+def select_recommended_audio(
+    formats: list[dict],
+):
+
+    audio_only = [
+        f
+        for f in formats
+        if f.get("has_audio")
+        and not f.get("has_video")
+    ]
+
+    progressive = [
+        f
+        for f in formats
+        if f.get("has_audio")
+        and f.get("has_video")
+    ]
+
+    candidates = (
+        audio_only
+        if audio_only
+        else progressive
+    )
+
+    if not candidates:
+        return None
+
+    candidates.sort(
+        key=lambda x: (
+            x.get("abr")
+            or 0,
+            x.get("filesize")
+            or 0,
+        ),
+        reverse=True,
+    )
+
+    return candidates[0]
+
+
+# ============================================================
+# CLEANUP
+# ============================================================
+
+def cleanup_old_files():
+
+    now = time.time()
+
+    try:
+
+        for path in DOWNLOAD_DIR.iterdir():
+
+            try:
+
+                if not path.is_file():
+                    continue
+
+                age = (
+                    now
+                    - path.stat().st_mtime
+                )
+
+                if age > FILE_TTL:
+
+                    path.unlink(
+                        missing_ok=True
+                    )
+
+                    logger.info(
+                        "[CLEANUP] Deleted: %s",
+                        path.name,
+                    )
+
+            except Exception as exc:
+
+                logger.warning(
+                    "[CLEANUP] Could not remove %s: %s",
+                    path.name,
+                    exc,
+                )
+
+    except Exception as exc:
+
+        logger.warning(
+            "[CLEANUP] Failed: %s",
+            exc,
+        )
+
+
+# ============================================================
+# ROOT
+# ============================================================
+
+@app.get("/")
+def root():
+
+    return {
+        "success": True,
+        "name": "Media Downloader API",
+        "version": APP_VERSION,
+        "status": "online",
+    }
+
+
+# ============================================================
+# HEALTH
+# ============================================================
+
+@app.get("/health")
+def health():
+
+    return {
+        "success": True,
+        "status": "healthy",
+        "version": APP_VERSION,
+        "yt_dlp": yt_dlp.version.__version__,
+    }
+
+
+# ============================================================
+# VERSION
+# ============================================================
+
+@app.get("/version")
+def version():
+
+    return {
+        "success": True,
+        "api_version": APP_VERSION,
+        "yt_dlp": yt_dlp.version.__version__,
+        "cookies_enabled": bool(
+            YOUTUBE_COOKIES.strip()
+        ),
+    }
+
+
+# ============================================================
+# ANALYZE
+# ============================================================
+
+@app.post("/analyze")
+def analyze(
+    request: AnalyzeRequest,
+):
+
+    cleanup_old_files()
+
+    url = validate_url(
+        request.url
+    )
 
     platform = detect_platform(
         url
     )
 
-    cookie_file = None
+    logger.info(
+        "=================================================="
+    )
+
+    logger.info(
+        "[ANALYZE] Platform: %s",
+        platform,
+    )
+
+    logger.info(
+        "[ANALYZE] URL received."
+    )
+
+    logger.info(
+        "[ANALYZE] Starting yt-dlp extraction..."
+    )
+
+    options = get_ytdlp_options(
+        download=False
+    )
 
     try:
-
-        # ----------------------------------------------------
-        # YouTube cookies
-        # ----------------------------------------------------
-
-        if platform == "YouTube":
-
-            if YOUTUBE_COOKIES:
-
-                cookie_file = (
-                    create_cookie_file()
-                )
-
-        options = (
-            get_ytdlp_options(
-                skip_download=True,
-                cookie_file=cookie_file,
-            )
-        )
 
         with yt_dlp.YoutubeDL(
             options
@@ -609,498 +840,172 @@ def extract_media_info(
                 download=False,
             )
 
-        return info
+        if not info:
 
-    finally:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    "Unable to extract media "
+                    "information."
+                ),
+            )
 
-        remove_cookie_file(
-            cookie_file
-        )
-
-
-# ============================================================
-# RECOMMENDED VIDEO
-# ============================================================
-
-def choose_recommended_video(
-    video_formats: list,
-    progressive_formats: list,
-):
-
-    candidates = []
-
-    # Progressive formats are preferred because
-    # they already contain video + audio.
-    candidates.extend(
-        progressive_formats
-    )
-
-    candidates.extend(
-        video_formats
-    )
-
-    if not candidates:
-
-        return None
-
-    usable = [
-
-        item
-
-        for item
-        in candidates
-
-        if item.get("height")
-    ]
-
-    if not usable:
-
-        return candidates[0]
-
-    under_720 = [
-
-        item
-
-        for item
-        in usable
+        # ----------------------------------------------------
+        # If yt-dlp returns playlist information, try to use
+        # the first video only.
+        # ----------------------------------------------------
 
         if (
-            item.get("height")
-            and
-            item["height"] <= 720
-        )
-    ]
+            info.get("_type") == "playlist"
+        ):
 
-    if under_720:
+            entries = info.get(
+                "entries"
+            ) or []
 
-        usable = under_720
-
-    usable.sort(
-
-        key=lambda item: (
-
-            item.get("height")
-            or 0,
-
-            item.get("fps")
-            or 0,
-        )
-    )
-
-    return usable[-1]
-
-
-# ============================================================
-# RECOMMENDED AUDIO
-# ============================================================
-
-def choose_recommended_audio(
-    audio_formats: list,
-):
-
-    if not audio_formats:
-
-        return None
-
-    usable = [
-
-        item
-
-        for item
-        in audio_formats
-
-        if item.get("abr") is not None
-    ]
-
-    if not usable:
-
-        return audio_formats[0]
-
-    usable.sort(
-
-        key=lambda item: (
-
-            item.get("abr")
-            or 0
-        )
-    )
-
-    return usable[-1]
-
-
-# ============================================================
-# ROOT ENDPOINT
-# ============================================================
-
-@app.get("/")
-def root():
-
-    return {
-
-        "name":
-            "Media Downloader API",
-
-        "version":
-            APP_VERSION,
-
-        "status":
-            "online",
-
-        "platforms": [
-
-            "YouTube",
-            "Facebook",
-            "Instagram",
-            "TikTok",
-            "X",
-        ],
-    }
-
-
-# ============================================================
-# HEALTH ENDPOINT
-# ============================================================
-
-@app.get("/health")
-def health():
-
-    return {
-
-        "status":
-            "ok",
-
-        "version":
-            APP_VERSION,
-    }
-
-
-# ============================================================
-# VERSION ENDPOINT
-# ============================================================
-
-@app.get("/version")
-def version():
-
-    try:
-
-        yt_version = (
-            yt_dlp.version.__version__
-        )
-
-    except Exception:
-
-        yt_version = "unknown"
-
-    return {
-
-        "api_version":
-            APP_VERSION,
-
-        "yt_dlp":
-            yt_version,
-
-        "node_available":
-            node_available(),
-
-        "ffmpeg_available":
-            ffmpeg_available(),
-
-        "ffprobe_available":
-            ffprobe_available(),
-
-        "cookies_configured":
-            bool(
-                YOUTUBE_COOKIES
-            ),
-    }
-
-
-# ============================================================
-# YOUTUBE DEBUG ENDPOINT
-# ============================================================
-
-@app.get("/debug-youtube")
-def debug_youtube():
-
-    test_url = (
-        "https://www.youtube.com/watch?v=L5aSgl7HKBA"
-    )
-
-    cookie_file = None
-
-    try:
-
-        if YOUTUBE_COOKIES:
-
-            cookie_file = (
-                create_cookie_file()
+            first_entry = next(
+                (
+                    entry
+                    for entry in entries
+                    if entry
+                ),
+                None,
             )
 
-        command = [
+            if first_entry:
 
-            "python",
-            "-m",
-            "yt_dlp",
+                info = first_entry
 
-            "--js-runtimes",
-            "node",
-
-            "--simulate",
-
-            "--no-playlist",
-
-            "--extractor-args",
-            (
-                "youtube:"
-                "player_client="
-                "default,web_embedded"
-            ),
-
-            test_url,
-        ]
-
-        if cookie_file:
-
-            command.insert(
-                len(command) - 1,
-                "--cookies",
-            )
-
-            command.insert(
-                len(command) - 1,
-                cookie_file,
-            )
-
-        result = subprocess.run(
-
-            command,
-
-            capture_output=True,
-
-            text=True,
-
-            timeout=180,
+        title = (
+            info.get("title")
+            or "Unknown title"
         )
 
-        return {
-
-            "success":
-                result.returncode == 0,
-
-            "return_code":
-                result.returncode,
-
-            "stdout":
-                result.stdout,
-
-            "stderr":
-                result.stderr,
-
-            "cookies_configured":
-                bool(
-                    YOUTUBE_COOKIES
-                ),
-
-            "youtube_cookies_used":
-                bool(
-                    cookie_file
-                ),
-
-            "node_available":
-                node_available(),
-
-            "ffmpeg_available":
-                ffmpeg_available(),
-
-            "ffprobe_available":
-                ffprobe_available(),
-        }
-
-    except subprocess.TimeoutExpired:
-
-        return {
-
-            "success":
-                False,
-
-            "error":
-                "yt-dlp test timed out after 180 seconds.",
-
-            "cookies_configured":
-                bool(
-                    YOUTUBE_COOKIES
-                ),
-
-            "youtube_cookies_used":
-                bool(
-                    cookie_file
-                ),
-
-            "node_available":
-                node_available(),
-
-            "ffmpeg_available":
-                ffmpeg_available(),
-
-            "ffprobe_available":
-                ffprobe_available(),
-        }
-
-    except Exception as error:
-
-        return {
-
-            "success":
-                False,
-
-            "error":
-                str(error),
-
-            "cookies_configured":
-                bool(
-                    YOUTUBE_COOKIES
-                ),
-
-            "youtube_cookies_used":
-                bool(
-                    cookie_file
-                ),
-
-            "node_available":
-                node_available(),
-
-            "ffmpeg_available":
-                ffmpeg_available(),
-
-            "ffprobe_available":
-                ffprobe_available(),
-        }
-
-    finally:
-
-        remove_cookie_file(
-            cookie_file
+        thumbnail = (
+            info.get("thumbnail")
         )
 
-
-# ============================================================
-# ANALYZE ENDPOINT
-# ============================================================
-
-@app.post("/analyze")
-def analyze(
-    request: AnalyzeRequest,
-):
-
-    url = validate_url(
-        request.url
-    )
-
-    platform = detect_platform(
-        url
-    )
-
-    if platform == "Unknown":
-
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                "Unsupported platform. "
-                "Supported platforms: "
-                "YouTube, Facebook, "
-                "Instagram, TikTok and X."
-            ),
+        duration = safe_int(
+            info.get("duration")
         )
 
-    try:
-
-        info = extract_media_info(
-            url
+        raw_formats = (
+            info.get("formats")
+            or []
         )
 
-        (
-            video_formats,
-            audio_formats,
-            progressive_formats,
-        ) = collect_formats(
-            info
+        public_formats = []
+
+        for fmt in raw_formats:
+
+            try:
+
+                converted = (
+                    format_to_public(
+                        fmt
+                    )
+                )
+
+                if converted[
+                    "format_id"
+                ]:
+
+                    public_formats.append(
+                        converted
+                    )
+
+            except Exception as exc:
+
+                logger.warning(
+                    "[ANALYZE] Skipping invalid format: %s",
+                    exc,
+                )
+
+        # ----------------------------------------------------
+        # Remove duplicate format IDs.
+        # ----------------------------------------------------
+
+        unique_formats = {}
+
+        for fmt in public_formats:
+
+            format_id = fmt[
+                "format_id"
+            ]
+
+            unique_formats[
+                format_id
+            ] = fmt
+
+        public_formats = list(
+            unique_formats.values()
         )
+
+        # ----------------------------------------------------
+        # Recommended formats
+        # ----------------------------------------------------
 
         recommended_video = (
-            choose_recommended_video(
-                video_formats,
-                progressive_formats,
+            select_recommended_video(
+                public_formats
             )
         )
 
         recommended_audio = (
-            choose_recommended_audio(
-                audio_formats
+            select_recommended_audio(
+                public_formats
             )
+        )
+
+        logger.info(
+            "[ANALYZE] Title: %s",
+            title,
+        )
+
+        logger.info(
+            "[ANALYZE] Formats found: %d",
+            len(public_formats),
+        )
+
+        logger.info(
+            "[ANALYZE] Recommended video: %s",
+            (
+                recommended_video.get(
+                    "format_id"
+                )
+                if recommended_video
+                else "None"
+            ),
+        )
+
+        logger.info(
+            "[ANALYZE] Recommended audio: %s",
+            (
+                recommended_audio.get(
+                    "format_id"
+                )
+                if recommended_audio
+                else "None"
+            ),
+        )
+
+        logger.info(
+            "=================================================="
         )
 
         return {
 
-            "success":
-                True,
+            "success": True,
 
-            "title":
-                info.get(
-                    "title"
-                ),
+            "title": title,
 
-            "platform":
-                platform,
+            "platform": platform,
 
-            "thumbnail":
-                info.get(
-                    "thumbnail"
-                ),
+            "thumbnail": thumbnail,
 
-            "duration":
-                safe_int(
-                    info.get(
-                        "duration"
-                    )
-                ),
+            "duration": duration,
 
-            "uploader":
-                info.get(
-                    "uploader"
-                ),
-
-            "channel":
-                info.get(
-                    "channel"
-                ),
-
-            "webpage_url":
-                info.get(
-                    "webpage_url"
-                ),
-
-            "has_video":
-                bool(
-                    video_formats
-                    or
-                    progressive_formats
-                ),
-
-            "has_audio":
-                bool(
-                    audio_formats
-                    or
-                    progressive_formats
-                ),
-
-            "video_formats":
-                video_formats,
-
-            "audio_formats":
-                audio_formats,
-
-            "progressive_formats":
-                progressive_formats,
+            "formats": public_formats,
 
             "recommended_video":
                 recommended_video,
@@ -1109,24 +1014,84 @@ def analyze(
                 recommended_audio,
         }
 
-    except Exception as error:
+    except HTTPException:
+
+        raise
+
+    except yt_dlp.utils.DownloadError as exc:
+
+        logger.error(
+            "[ANALYZE] yt-dlp error: %s",
+            exc,
+        )
+
+        error_message = str(
+            exc
+        )
+
+        # ----------------------------------------------------
+        # Friendlier error messages
+        # ----------------------------------------------------
+
+        if (
+            "403"
+            in error_message
+        ):
+
+            detail = (
+                "The media platform "
+                "blocked the request (HTTP 403). "
+                "Please try another link."
+            )
+
+        elif (
+            "Sign in"
+            in error_message
+            or "login"
+            in error_message.lower()
+        ):
+
+            detail = (
+                "This media requires authentication "
+                "and could not be accessed."
+            )
+
+        else:
+
+            detail = (
+                "Unable to analyze this media link."
+            )
 
         raise HTTPException(
             status_code=422,
-            detail=clean_error(
-                error
+            detail=detail,
+        )
+
+    except Exception as exc:
+
+        logger.exception(
+            "[ANALYZE] Unexpected error"
+        )
+
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                "Unexpected server error "
+                "while analyzing the media."
             ),
         )
 
 
 # ============================================================
-# DOWNLOAD ENDPOINT
+# DOWNLOAD
 # ============================================================
 
 @app.post("/download")
 def download(
     request: DownloadRequest,
 ):
+
+    cleanup_old_files()
 
     url = validate_url(
         request.url
@@ -1136,98 +1101,48 @@ def download(
         url
     )
 
-    if platform == "Unknown":
+    requested_format_id = (
+        request.format_id.strip()
+    )
+
+    if not requested_format_id:
 
         raise HTTPException(
             status_code=400,
-            detail="Unsupported platform.",
+            detail="format_id is required.",
         )
 
-    job_id = uuid.uuid4().hex
-
-    output_dir = (
-        DOWNLOAD_DIR / job_id
+    logger.info(
+        "=================================================="
     )
 
-    output_dir.mkdir(
-        parents=True,
-        exist_ok=True,
+    logger.info(
+        "[DOWNLOAD] Platform: %s",
+        platform,
     )
 
-    cookie_file = None
+    logger.info(
+        "[DOWNLOAD] Requested format: %s",
+        requested_format_id,
+    )
+
+    logger.info(
+        "[DOWNLOAD] Media type: %s",
+        request.media_type,
+    )
+
+    # ========================================================
+    # FIRST: EXTRACT MEDIA INFORMATION
+    # ========================================================
+
+    analyze_options = get_ytdlp_options(
+        download=False
+    )
 
     try:
 
-        # ====================================================
-        # CREATE YOUTUBE COOKIE FILE
-        # ====================================================
-
-        if platform == "YouTube":
-
-            if YOUTUBE_COOKIES:
-
-                cookie_file = (
-                    create_cookie_file()
-                )
-
-
-        # ====================================================
-        # LOG DOWNLOAD REQUEST
-        # ====================================================
-
-        print("")
-        print(
-            "========================================"
-        )
-        print(
-            "          DOWNLOAD REQUEST"
-        )
-        print(
-            "========================================"
-        )
-
-        print(
-            f"Platform: {platform}"
-        )
-
-        print(
-            f"Media type: "
-            f"{request.media_type}"
-        )
-
-        print(
-            f"Requested format: "
-            f"{request.format_id}"
-        )
-
-        print(
-            "Cookies used: "
-            f"{bool(cookie_file)}"
-        )
-
-        print(
-            "========================================"
-        )
-
-
-        # ====================================================
-        # STEP 1
-        # EXTRACT MEDIA INFORMATION
-        # ====================================================
-
-        extract_options = (
-            get_ytdlp_options(
-                skip_download=True,
-                cookie_file=cookie_file,
-            )
-        )
-
-        print(
-            "[DOWNLOAD] Extracting media information..."
-        )
-
         with yt_dlp.YoutubeDL(
-            extract_options
+            analyze_options
         ) as ydl:
 
             info = ydl.extract_info(
@@ -1235,450 +1150,429 @@ def download(
                 download=False,
             )
 
+    except yt_dlp.utils.DownloadError as exc:
 
-        formats = (
-            info.get(
-                "formats"
-            )
-            or []
+        logger.error(
+            "[DOWNLOAD] Extraction failed: %s",
+            exc,
         )
-
-
-        print(
-            "[DOWNLOAD] Formats found: "
-            f"{len(formats)}"
-        )
-
-
-        # ====================================================
-        # STEP 2
-        # FIND REQUESTED FORMAT
-        # ====================================================
-
-        requested_format = None
-
-        if request.format_id:
-
-            requested_format = next(
-
-                (
-                    fmt
-
-                    for fmt
-                    in formats
-
-                    if str(
-                        fmt.get(
-                            "format_id",
-                            "",
-                        )
-                    )
-                    == str(
-                        request.format_id
-                    )
-                ),
-
-                None,
-            )
-
-
-        if requested_format:
-
-            print(
-                "[DOWNLOAD] Requested format found."
-            )
-
-            print(
-                "[DOWNLOAD] Format ID: "
-                f"{requested_format.get('format_id')}"
-            )
-
-            print(
-                "[DOWNLOAD] Extension: "
-                f"{requested_format.get('ext')}"
-            )
-
-            print(
-                "[DOWNLOAD] Video codec: "
-                f"{requested_format.get('vcodec')}"
-            )
-
-            print(
-                "[DOWNLOAD] Audio codec: "
-                f"{requested_format.get('acodec')}"
-            )
-
-            print(
-                "[DOWNLOAD] Protocol: "
-                f"{requested_format.get('protocol')}"
-            )
-
-        else:
-
-            print(
-                "[DOWNLOAD] Requested format "
-                "was not found."
-            )
-
-
-        # ====================================================
-        # STEP 3
-        # SELECT DOWNLOAD FORMAT
-        # ====================================================
-
-        if (
-            request.media_type.lower()
-            == "audio"
-        ):
-
-            # ------------------------------------------------
-            # AUDIO
-            # ------------------------------------------------
-
-            if requested_format:
-
-                selected_format = str(
-                    requested_format.get(
-                        "format_id"
-                    )
-                )
-
-            else:
-
-                selected_format = (
-                    "bestaudio/best"
-                )
-
-        else:
-
-            # ------------------------------------------------
-            # VIDEO
-            # ------------------------------------------------
-
-            if requested_format:
-
-                selected_format = str(
-                    requested_format.get(
-                        "format_id"
-                    )
-                )
-
-            else:
-
-                selected_format = (
-                    "best[ext=mp4]"
-                    "[vcodec!=none]"
-                    "[acodec!=none]"
-                    "/best[ext=mp4]"
-                    "/best"
-                )
-
-
-        print(
-            "[DOWNLOAD] Selected format: "
-            f"{selected_format}"
-        )
-
-
-        # ====================================================
-        # STEP 4
-        # OUTPUT TEMPLATE
-        # ====================================================
-
-        output_template = str(
-
-            output_dir
-            / "%(title)s.%(ext)s"
-        )
-
-
-        # ====================================================
-        # STEP 5
-        # DOWNLOAD OPTIONS
-        # ====================================================
-
-        options = (
-            get_ytdlp_options(
-                skip_download=False,
-                cookie_file=cookie_file,
-            )
-        )
-
-        options["format"] = (
-            selected_format
-        )
-
-        options["outtmpl"] = (
-            output_template
-        )
-
-        options["noplaylist"] = True
-
-        options["continuedl"] = True
-
-        options["overwrites"] = True
-
-        options["retries"] = 5
-
-        options["fragment_retries"] = 5
-
-        options["file_access_retries"] = 3
-
-
-        # ====================================================
-        # AUDIO
-        # ====================================================
-
-        if (
-            request.media_type.lower()
-            == "audio"
-        ):
-
-            audio_format = (
-                request.audio_format
-                or "mp3"
-            ).lower()
-
-            allowed_audio = [
-
-                "mp3",
-                "m4a",
-                "wav",
-                "opus",
-                "flac",
-            ]
-
-            if (
-                audio_format
-                not in allowed_audio
-            ):
-
-                audio_format = "mp3"
-
-
-            options[
-                "postprocessors"
-            ] = [
-
-                {
-
-                    "key":
-                        "FFmpegExtractAudio",
-
-                    "preferredcodec":
-                        audio_format,
-
-                    "preferredquality":
-                        "192",
-                }
-            ]
-
-
-        # ====================================================
-        # VIDEO
-        # ====================================================
-
-        else:
-
-            options[
-                "merge_output_format"
-            ] = "mp4"
-
-
-        # ====================================================
-        # STEP 6
-        # ACTUAL DOWNLOAD
-        # ====================================================
-
-        print("")
-        print(
-            "========================================"
-        )
-
-        print(
-            "[DOWNLOAD] STARTING ACTUAL DOWNLOAD"
-        )
-
-        print(
-            f"[DOWNLOAD] URL: {url}"
-        )
-
-        print(
-            f"[DOWNLOAD] Format: "
-            f"{selected_format}"
-        )
-
-        print(
-            "========================================"
-        )
-
-
-        with yt_dlp.YoutubeDL(
-            options
-        ) as ydl:
-
-            downloaded_info = (
-                ydl.extract_info(
-                    url,
-                    download=True,
-                )
-            )
-
-
-        # ====================================================
-        # STEP 7
-        # FIND DOWNLOADED FILE
-        # ====================================================
-
-        files = [
-
-            file
-
-            for file
-            in output_dir.iterdir()
-
-            if file.is_file()
-        ]
-
-
-        if not files:
-
-            raise Exception(
-                "yt-dlp completed but "
-                "no output file was found."
-            )
-
-
-        files.sort(
-
-            key=lambda file:
-                file.stat().st_mtime,
-
-            reverse=True,
-        )
-
-
-        output_file = files[0]
-
-
-        # ====================================================
-        # SUCCESS LOG
-        # ====================================================
-
-        print("")
-        print(
-            "========================================"
-        )
-
-        print(
-            "[DOWNLOAD] DOWNLOAD SUCCESSFUL"
-        )
-
-        print(
-            f"[DOWNLOAD] Filename: "
-            f"{output_file.name}"
-        )
-
-        print(
-            f"[DOWNLOAD] Size: "
-            f"{output_file.stat().st_size} bytes"
-        )
-
-        print(
-            "========================================"
-        )
-
-
-        # ====================================================
-        # RETURN RESULT
-        # ====================================================
-
-        return {
-
-            "success":
-                True,
-
-            "title":
-                downloaded_info.get(
-                    "title"
-                ),
-
-            "platform":
-                platform,
-
-            "format_id":
-                selected_format,
-
-            "filename":
-                output_file.name,
-
-            "file_size":
-                output_file.stat().st_size,
-
-            "download_url":
-                (
-                    f"/files/"
-                    f"{job_id}/"
-                    f"{output_file.name}"
-                ),
-        }
-
-
-    except Exception as error:
-
-        # ====================================================
-        # DOWNLOAD ERROR LOG
-        # ====================================================
-
-        print("")
-        print(
-            "========================================"
-        )
-
-        print(
-            "[DOWNLOAD] DOWNLOAD FAILED"
-        )
-
-        print(
-            f"[DOWNLOAD] ERROR: "
-            f"{error}"
-        )
-
-        print(
-            "========================================"
-        )
-
-
-        # ====================================================
-        # REMOVE FAILED DOWNLOAD
-        # ====================================================
-
-        try:
-
-            if output_dir.exists():
-
-                shutil.rmtree(
-                    output_dir
-                )
-
-        except Exception:
-
-            pass
-
 
         raise HTTPException(
             status_code=422,
-            detail=clean_error(
-                error
+            detail=(
+                "Unable to access the media "
+                "for downloading."
             ),
         )
 
+    except Exception as exc:
 
-    finally:
-
-        remove_cookie_file(
-            cookie_file
+        logger.exception(
+            "[DOWNLOAD] Unexpected extraction error"
         )
+
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                "Unexpected error while preparing "
+                "the download."
+            ),
+        )
+
+    # ========================================================
+    # PLAYLIST PROTECTION
+    # ========================================================
+
+    if (
+        info.get("_type") == "playlist"
+    ):
+
+        entries = info.get(
+            "entries"
+        ) or []
+
+        first_entry = next(
+            (
+                entry
+                for entry in entries
+                if entry
+            ),
+            None,
+        )
+
+        if first_entry:
+
+            info = first_entry
+
+    # ========================================================
+    # FIND REQUESTED FORMAT
+    # ========================================================
+
+    formats = (
+        info.get("formats")
+        or []
+    )
+
+    selected_format = None
+
+    for fmt in formats:
+
+        if str(
+            fmt.get("format_id")
+        ) == requested_format_id:
+
+            selected_format = fmt
+
+            break
+
+    if selected_format is None:
+
+        logger.error(
+            "[DOWNLOAD] Requested format not found: %s",
+            requested_format_id,
+        )
+
+        available_ids = [
+            str(
+                fmt.get("format_id")
+            )
+            for fmt in formats
+            if fmt.get("format_id")
+        ]
+
+        logger.info(
+            "[DOWNLOAD] Available formats: %s",
+            ", ".join(
+                available_ids[:30]
+            ),
+        )
+
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "The requested format is "
+                "no longer available. "
+                "Please analyze the link again."
+            ),
+        )
+
+    logger.info(
+        "[DOWNLOAD] Requested format found."
+    )
+
+    logger.info(
+        "[DOWNLOAD] Selected format: %s",
+        selected_format.get(
+            "format_id"
+        ),
+    )
+
+    logger.info(
+        "[DOWNLOAD] Extension: %s",
+        selected_format.get(
+            "ext"
+        ),
+    )
+
+    logger.info(
+        "[DOWNLOAD] Video codec: %s",
+        selected_format.get(
+            "vcodec"
+        ),
+    )
+
+    logger.info(
+        "[DOWNLOAD] Audio codec: %s",
+        selected_format.get(
+            "acodec"
+        ),
+    )
+
+    # ========================================================
+    # OUTPUT DIRECTORY
+    # ========================================================
+
+    job_id = uuid.uuid4().hex
+
+    job_dir = (
+        DOWNLOAD_DIR
+        / job_id
+    )
+
+    job_dir.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
+    # ========================================================
+    # OUTPUT FILE
+    # ========================================================
+
+    media_type = (
+        request.media_type.lower()
+    )
+
+    if media_type == "audio":
+
+        extension = (
+            request.audio_format
+            or "mp3"
+        )
+
+        extension = extension.lower()
+
+        if extension not in {
+            "mp3",
+            "m4a",
+            "opus",
+            "wav",
+        }:
+
+            extension = "mp3"
+
+    else:
+
+        extension = (
+            selected_format.get(
+                "ext"
+            )
+            or "mp4"
+        )
+
+        extension = str(
+            extension
+        ).lower()
+
+        if extension == "webm":
+
+            extension = "mp4"
+
+    output_template = str(
+        job_dir
+        / "media.%(ext)s"
+    )
+
+    # ========================================================
+    # DOWNLOAD OPTIONS
+    # ========================================================
+
+    download_options = get_ytdlp_options(
+        download=True,
+        output_template=output_template,
+    )
+
+    # --------------------------------------------------------
+    # IMPORTANT:
+    #
+    # Download EXACTLY the format selected by the Flutter app.
+    # --------------------------------------------------------
+
+    if media_type == "audio":
+
+        download_options[
+            "format"
+        ] = requested_format_id
+
+        download_options[
+            "postprocessors"
+        ] = [
+            {
+                "key":
+                    "FFmpegExtractAudio",
+
+                "preferredcodec":
+                    extension,
+
+                "preferredquality":
+                    "192",
+            }
+        ]
+
+    else:
+
+        download_options[
+            "format"
+        ] = requested_format_id
+
+    # ========================================================
+    # ACTUAL DOWNLOAD
+    # ========================================================
+
+    logger.info(
+        "[DOWNLOAD] STARTING ACTUAL DOWNLOAD"
+    )
+
+    try:
+
+        with yt_dlp.YoutubeDL(
+            download_options
+        ) as ydl:
+
+            ydl.download(
+                [url]
+            )
+
+    except yt_dlp.utils.DownloadError as exc:
+
+        logger.error(
+            "[DOWNLOAD] DOWNLOAD FAILED"
+        )
+
+        logger.error(
+            "[DOWNLOAD] %s",
+            exc,
+        )
+
+        # ----------------------------------------------------
+        # Remove failed job directory
+        # ----------------------------------------------------
+
+        try:
+
+            shutil.rmtree(
+                job_dir,
+                ignore_errors=True,
+            )
+
+        except Exception:
+            pass
+
+        error_message = str(
+            exc
+        )
+
+        if "403" in error_message:
+
+            detail = (
+                "The media server returned "
+                "HTTP 403 while downloading. "
+                "Please try analyzing the link again "
+                "or try another media link."
+            )
+
+        elif (
+            "Sign in"
+            in error_message
+        ):
+
+            detail = (
+                "This media requires authentication "
+                "and could not be downloaded."
+            )
+
+        else:
+
+            detail = (
+                "The media download failed."
+            )
+
+        raise HTTPException(
+            status_code=422,
+            detail=detail,
+        )
+
+    except Exception as exc:
+
+        logger.exception(
+            "[DOWNLOAD] Unexpected download error"
+        )
+
+        try:
+
+            shutil.rmtree(
+                job_dir,
+                ignore_errors=True,
+            )
+
+        except Exception:
+            pass
+
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                "Unexpected server error "
+                "during download."
+            ),
+        )
+
+    # ========================================================
+    # FIND RESULT FILE
+    # ========================================================
+
+    downloaded_files = [
+        file
+        for file in job_dir.iterdir()
+        if file.is_file()
+        and not file.name.endswith(
+            ".part"
+        )
+    ]
+
+    if not downloaded_files:
+
+        logger.error(
+            "[DOWNLOAD] No output file was created."
+        )
+
+        shutil.rmtree(
+            job_dir,
+            ignore_errors=True,
+        )
+
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                "Download completed but "
+                "no output file was found."
+            ),
+        )
+
+    output_file = max(
+        downloaded_files,
+        key=lambda file:
+            file.stat().st_mtime,
+    )
+
+    filename = output_file.name
+
+    logger.info(
+        "[DOWNLOAD] Download completed."
+    )
+
+    logger.info(
+        "[DOWNLOAD] File: %s",
+        filename,
+    )
+
+    logger.info(
+        "[DOWNLOAD] Job ID: %s",
+        job_id,
+    )
+
+    logger.info(
+        "=================================================="
+    )
+
+    return {
+
+        "success": True,
+
+        "job_id": job_id,
+
+        "filename": filename,
+
+        "download_url":
+            f"/files/{job_id}/{filename}",
+
+        "title":
+            info.get(
+                "title"
+            )
+            or "Downloaded media",
+
+        "platform":
+            platform,
+    }
 
 
 # ============================================================
@@ -1688,32 +1582,49 @@ def download(
 @app.get(
     "/files/{job_id}/{filename}"
 )
-def serve_file(
+def get_file(
     job_id: str,
     filename: str,
 ):
 
-    # Prevent path traversal.
-    safe_filename = Path(
-        filename
-    ).name
+    # --------------------------------------------------------
+    # Basic security validation
+    # --------------------------------------------------------
 
-    job_dir = (
-        DOWNLOAD_DIR / job_id
-    )
+    if (
+        "/" in job_id
+        or "\\" in job_id
+        or ".." in job_id
+    ):
+
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid job ID.",
+        )
+
+    if (
+        "/" in filename
+        or "\\" in filename
+        or ".." in filename
+    ):
+
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid filename.",
+        )
 
     file_path = (
-        job_dir / safe_filename
+        DOWNLOAD_DIR
+        / job_id
+        / filename
     )
-
 
     if not file_path.exists():
 
         raise HTTPException(
             status_code=404,
-            detail="File not found.",
+            detail="File not found or expired.",
         )
-
 
     if not file_path.is_file():
 
@@ -1722,59 +1633,100 @@ def serve_file(
             detail="File not found.",
         )
 
-
     return FileResponse(
-        path=file_path,
-        filename=file_path.name,
+        path=str(
+            file_path
+        ),
+        filename=filename,
     )
 
 
 # ============================================================
-# CLEAN OLD DOWNLOADS
+# DEBUG YOUTUBE
 # ============================================================
 
-def cleanup_old_files():
+@app.get(
+    "/debug-youtube"
+)
+def debug_youtube():
 
-    if not DOWNLOAD_DIR.exists():
+    """
+    Simple diagnostic endpoint.
 
-        return
+    It uses a public test video.
+    """
 
+    test_url = (
+        "https://www.youtube.com/"
+        "watch?v=L5aSgl7HKBA"
+    )
 
-    current_time = time.time()
+    test_url = normalize_youtube_url(
+        test_url
+    )
 
+    logger.info(
+        "[DEBUG] Testing YouTube."
+    )
 
-    for job_dir in (
-        DOWNLOAD_DIR.iterdir()
-    ):
+    options = get_ytdlp_options(
+        download=False
+    )
 
-        if not job_dir.is_dir():
+    try:
 
-            continue
+        with yt_dlp.YoutubeDL(
+            options
+        ) as ydl:
 
-
-        try:
-
-            modified_time = (
-                job_dir.stat().st_mtime
+            info = ydl.extract_info(
+                test_url,
+                download=False,
             )
 
-            age = (
-                current_time
-                - modified_time
-            )
+        return {
 
+            "success": True,
 
-            if age > FILE_TTL:
+            "message":
+                "YouTube extraction succeeded.",
 
-                shutil.rmtree(
-                    job_dir,
-                    ignore_errors=True,
-                )
+            "title":
+                info.get(
+                    "title"
+                ),
 
+            "id":
+                info.get(
+                    "id"
+                ),
 
-        except Exception:
+            "duration":
+                info.get(
+                    "duration"
+                ),
 
-            pass
+            "formats":
+                len(
+                    info.get(
+                        "formats"
+                    )
+                    or []
+                ),
+        }
+
+    except Exception as exc:
+
+        logger.exception(
+            "[DEBUG] YouTube test failed."
+        )
+
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "YouTube debug test failed."
+            ),
+        )
 
 
 # ============================================================
@@ -1786,55 +1738,55 @@ def cleanup_old_files():
 )
 def startup_event():
 
-    print("")
-    print(
-        "========================================"
+    logger.info(
+        "=================================================="
     )
 
-    print(
-        "       MEDIA DOWNLOADER API"
+    logger.info(
+        "Media Downloader API starting..."
     )
 
-    print(
-        "========================================"
+    logger.info(
+        "API version: %s",
+        APP_VERSION,
     )
 
-    print(
-        f"API Version: {APP_VERSION}"
+    logger.info(
+        "yt-dlp version: %s",
+        yt_dlp.version.__version__,
     )
 
-    print(
-        "yt-dlp Version: "
-        f"{yt_dlp.version.__version__}"
+    logger.info(
+        "Download directory: %s",
+        DOWNLOAD_DIR,
     )
 
-    print(
-        "Node available: "
-        f"{node_available()}"
+    logger.info(
+        "File TTL: %s seconds",
+        FILE_TTL,
     )
 
-    print(
-        "FFmpeg available: "
-        f"{ffmpeg_available()}"
+    logger.info(
+        "YouTube cookies configured: %s",
+        bool(
+            YOUTUBE_COOKIES.strip()
+        ),
     )
 
-    print(
-        "FFprobe available: "
-        f"{ffprobe_available()}"
+    logger.info(
+        "=================================================="
     )
 
-    print(
-        "YouTube cookies configured: "
-        f"{bool(YOUTUBE_COOKIES)}"
-    )
 
-    print(
-        "File TTL: "
-        f"{FILE_TTL} seconds"
-    )
+# ============================================================
+# SHUTDOWN
+# ============================================================
 
-    print(
-        "========================================"
-    )
+@app.on_event(
+    "shutdown"
+)
+def shutdown_event():
 
-    cleanup_old_files()
+    logger.info(
+        "Media Downloader API shutting down."
+    )
