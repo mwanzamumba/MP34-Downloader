@@ -1,109 +1,74 @@
 class MediaInfo {
+  final bool success;
   final String title;
   final String platform;
   final String? thumbnail;
   final int? duration;
   final String? uploader;
   final String? channel;
+  final String? webpageUrl;
 
   final bool hasVideo;
   final bool hasAudio;
-
-  final MediaFormat? recommendedVideo;
-  final MediaFormat? recommendedAudio;
 
   final List<MediaFormat> videoFormats;
   final List<MediaFormat> audioFormats;
   final List<MediaFormat> progressiveFormats;
 
+  final MediaFormat? recommendedVideo;
+  final MediaFormat? recommendedAudio;
+
   MediaInfo({
+    required this.success,
     required this.title,
     required this.platform,
     this.thumbnail,
     this.duration,
     this.uploader,
     this.channel,
+    this.webpageUrl,
     required this.hasVideo,
     required this.hasAudio,
-    this.recommendedVideo,
-    this.recommendedAudio,
     required this.videoFormats,
     required this.audioFormats,
     required this.progressiveFormats,
+    this.recommendedVideo,
+    this.recommendedAudio,
   });
 
-  factory MediaInfo.fromJson(
-    Map<String, dynamic> json,
-  ) {
+  factory MediaInfo.fromJson(Map<String, dynamic> json) {
     return MediaInfo(
-      title:
-          json['title']?.toString() ??
-              'Unknown title',
+      success: json['success'] ?? false,
+      title: json['title'] ?? 'Unknown title',
+      platform: json['platform'] ?? 'Unknown',
+      thumbnail: json['thumbnail'],
+      duration: json['duration'],
+      uploader: json['uploader'],
+      channel: json['channel'],
+      webpageUrl: json['webpage_url'],
 
-      platform:
-          json['platform']?.toString() ??
-              'Unknown',
+      hasVideo: json['has_video'] ?? false,
+      hasAudio: json['has_audio'] ?? false,
 
-      thumbnail:
-          json['thumbnail']?.toString(),
+      videoFormats: (json['video_formats'] as List? ?? [])
+          .map((item) => MediaFormat.fromJson(item))
+          .toList(),
 
-      duration:
-          (json['duration'] as num?)?.toInt(),
+      audioFormats: (json['audio_formats'] as List? ?? [])
+          .map((item) => MediaFormat.fromJson(item))
+          .toList(),
 
-      uploader:
-          json['uploader']?.toString(),
+      progressiveFormats: (json['progressive_formats'] as List? ?? [])
+          .map((item) => MediaFormat.fromJson(item))
+          .toList(),
 
-      channel:
-          json['channel']?.toString(),
+      recommendedVideo: json['recommended_video'] != null
+          ? MediaFormat.fromJson(json['recommended_video'])
+          : null,
 
-      hasVideo:
-          json['has_video'] == true,
-
-      hasAudio:
-          json['has_audio'] == true,
-
-      recommendedVideo:
-          json['recommended_video'] != null
-              ? MediaFormat.fromJson(
-                  json['recommended_video']
-                      as Map<String, dynamic>,
-                )
-              : null,
-
-      recommendedAudio:
-          json['recommended_audio'] != null
-              ? MediaFormat.fromJson(
-                  json['recommended_audio']
-                      as Map<String, dynamic>,
-                )
-              : null,
-
-      videoFormats:
-          (json['video_formats'] as List? ?? [])
-              .map(
-                (item) => MediaFormat.fromJson(
-                  item as Map<String, dynamic>,
-                ),
-              )
-              .toList(),
-
-      audioFormats:
-          (json['audio_formats'] as List? ?? [])
-              .map(
-                (item) => MediaFormat.fromJson(
-                  item as Map<String, dynamic>,
-                ),
-              )
-              .toList(),
-
-      progressiveFormats:
-          (json['progressive_formats'] as List? ?? [])
-              .map(
-                (item) => MediaFormat.fromJson(
-                  item as Map<String, dynamic>,
-                ),
-              )
-              .toList(),
+      recommendedAudio: json['recommended_audio'] != null
+          ? MediaFormat.fromJson(json['recommended_audio'])
+          : null,
     );
   }
 }
@@ -111,134 +76,119 @@ class MediaInfo {
 
 class MediaFormat {
   final String formatId;
-  final String type;
-
-  final String? ext;
-  final String? formatNote;
+  final String ext;
+  final String? resolution;
 
   final int? width;
   final int? height;
-
-  final String? resolution;
-
   final double? fps;
+
+  final int? filesize;
 
   final String? vcodec;
   final String? acodec;
 
   final double? abr;
   final double? vbr;
-  final double? tbr;
 
-  final int? filesize;
-
-  final bool hasVideo;
-  final bool hasAudio;
-  final bool progressive;
+  final String? formatNote;
+  final String? protocol;
+  final String? formatType;
 
   MediaFormat({
     required this.formatId,
-    required this.type,
-    this.ext,
-    this.formatNote,
+    required this.ext,
+    this.resolution,
     this.width,
     this.height,
-    this.resolution,
     this.fps,
+    this.filesize,
     this.vcodec,
     this.acodec,
     this.abr,
     this.vbr,
-    this.tbr,
-    this.filesize,
-    required this.hasVideo,
-    required this.hasAudio,
-    required this.progressive,
+    this.formatNote,
+    this.protocol,
+    this.formatType,
   });
 
-  factory MediaFormat.fromJson(
-    Map<String, dynamic> json,
-  ) {
+  factory MediaFormat.fromJson(Map<String, dynamic> json) {
     return MediaFormat(
-      formatId:
-          json['format_id']?.toString() ?? '',
+      formatId: json['format_id']?.toString() ?? '',
+      ext: json['ext']?.toString() ?? '',
+      resolution: json['resolution']?.toString(),
 
-      type:
-          json['type']?.toString() ?? '',
+      width: json['width'] is num
+          ? (json['width'] as num).toInt()
+          : null,
 
-      ext:
-          json['ext']?.toString(),
+      height: json['height'] is num
+          ? (json['height'] as num).toInt()
+          : null,
 
-      formatNote:
-          json['format_note']?.toString(),
+      fps: json['fps'] is num
+          ? (json['fps'] as num).toDouble()
+          : null,
 
-      width:
-          (json['width'] as num?)?.toInt(),
+      filesize: json['filesize'] is num
+          ? (json['filesize'] as num).toInt()
+          : null,
 
-      height:
-          (json['height'] as num?)?.toInt(),
+      vcodec: json['vcodec']?.toString(),
+      acodec: json['acodec']?.toString(),
 
-      resolution:
-          json['resolution']?.toString(),
+      abr: json['abr'] is num
+          ? (json['abr'] as num).toDouble()
+          : null,
 
-      fps:
-          (json['fps'] as num?)?.toDouble(),
+      vbr: json['vbr'] is num
+          ? (json['vbr'] as num).toDouble()
+          : null,
 
-      vcodec:
-          json['vcodec']?.toString(),
-
-      acodec:
-          json['acodec']?.toString(),
-
-      abr:
-          (json['abr'] as num?)?.toDouble(),
-
-      vbr:
-          (json['vbr'] as num?)?.toDouble(),
-
-      tbr:
-          (json['tbr'] as num?)?.toDouble(),
-
-      filesize:
-          (json['filesize'] as num?)?.toInt(),
-
-      hasVideo:
-          json['has_video'] == true,
-
-      hasAudio:
-          json['has_audio'] == true,
-
-      progressive:
-          json['progressive'] == true,
+      formatNote: json['format_note']?.toString(),
+      protocol: json['protocol']?.toString(),
+      formatType: json['format_type']?.toString(),
     );
   }
 
-  String get qualityLabel {
-    if (height != null && height! > 0) {
-      return '${height}p';
-    }
+  bool get hasVideo {
+    return vcodec != null &&
+        vcodec!.isNotEmpty &&
+        vcodec != 'none';
+  }
 
-    if (resolution != null &&
-        resolution!.isNotEmpty) {
-      return resolution!;
-    }
+  bool get hasAudio {
+    return acodec != null &&
+        acodec!.isNotEmpty &&
+        acodec != 'none';
+  }
 
-    if (formatNote != null &&
-        formatNote!.isNotEmpty) {
+  bool get isProgressive {
+    return hasVideo && hasAudio;
+  }
+
+  String get displayResolution {
+    if (formatNote != null && formatNote!.isNotEmpty) {
       return formatNote!;
     }
 
-    return ext?.toUpperCase() ?? 'UNKNOWN';
-  }
-
-  String get sizeLabel {
-    if (filesize == null ||
-        filesize! <= 0) {
-      return '';
+    if (resolution != null && resolution!.isNotEmpty) {
+      return resolution!;
     }
 
-    final mb =
-        filesize! / (1024 * 1024);
+    if (height != null) {
+      return '${height}p';
+    }
+
+    return 'Unknown quality';
+  }
+
+  String get displaySize {
+    if (filesize == null || filesize! <= 0) {
+      return 'Unknown size';
+    }
+
+    final mb = filesize! / (1024 * 1024);
 
     if (mb >= 1024) {
       return '${(mb / 1024).toStringAsFixed(1)} GB';
@@ -247,44 +197,19 @@ class MediaFormat {
     return '${mb.toStringAsFixed(1)} MB';
   }
 
-  String get description {
-    final parts = <String>[];
-
-    if (qualityLabel.isNotEmpty) {
-      parts.add(qualityLabel);
-    }
-
-    if (ext != null &&
-        ext!.isNotEmpty) {
-      parts.add(
-        ext!.toUpperCase(),
-      );
-    }
-
-    if (progressive) {
-      parts.add('Video + Audio');
-    } else if (hasVideo) {
-      parts.add('Video');
-    } else if (hasAudio) {
-      parts.add('Audio');
-    }
-
-    return parts.join(' • ');
-  }
-
-  String get displayName {
-    if (progressive) {
-      return '$qualityLabel • Video + Audio';
+  String get displayType {
+    if (isProgressive) {
+      return 'Video + Audio';
     }
 
     if (hasVideo) {
-      return '$qualityLabel • Video';
+      return 'Video only';
     }
 
     if (hasAudio) {
-      return '$qualityLabel • Audio';
+      return 'Audio only';
     }
 
-    return qualityLabel;
+    return 'Unknown';
   }
 }
