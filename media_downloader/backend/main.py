@@ -1191,7 +1191,6 @@ def version():
 # ============================================================
 # DEBUG YOUTUBE
 # ============================================================
-
 @app.get("/debug-youtube")
 def debug_youtube():
 
@@ -1199,51 +1198,91 @@ def debug_youtube():
         "https://www.youtube.com/watch?v=L5aSgl7HKBA"
     )
 
-    try:
+    cookie_file = None
 
-        info = extract_info(
-            test_url
+    try:
+        if YOUTUBE_COOKIES:
+            cookie_file = create_cookie_file()
+
+        options = {
+            "quiet": False,
+            "no_warnings": False,
+            "ignoreconfig": True,
+            "noplaylist": True,
+
+            "socket_timeout": 60,
+            "retries": 3,
+            "fragment_retries": 3,
+
+            "js_runtimes": {
+                "node": {}
+            },
+
+            # Do NOT force player_client here.
+            #
+            # We want yt-dlp to choose its normal
+            # current YouTube extraction strategy.
+        }
+
+        if cookie_file:
+            options["cookiefile"] = cookie_file
+
+        print("========================================")
+        print("[DEBUG] YouTube extraction test")
+        print(f"[DEBUG] URL: {test_url}")
+        print(
+            f"[DEBUG] Cookies supplied: "
+            f"{bool(cookie_file)}"
         )
+        print(
+            f"[DEBUG] Node available: "
+            f"{node_available()}"
+        )
+        print(
+            f"[DEBUG] FFmpeg available: "
+            f"{ffmpeg_available()}"
+        )
+        print("========================================")
+
+        with yt_dlp.YoutubeDL(options) as ydl:
+
+            info = ydl.extract_info(
+                test_url,
+                download=False,
+            )
 
         formats = (
             info.get("formats")
             or []
         )
 
-        usable_formats = []
+        result_formats = []
 
         for fmt in formats:
 
-            if is_storyboard(fmt):
+            format_id = str(
+                fmt.get(
+                    "format_id",
+                    "",
+                )
+            )
 
-                continue
-
-            if not (
-                has_video(fmt)
-                or has_audio(fmt)
-            ):
-
+            if format_id.startswith("sb"):
                 continue
 
             if is_progressive(fmt):
-
-                format_type = (
-                    "progressive"
-                )
+                format_type = "progressive"
 
             elif has_video(fmt):
+                format_type = "video"
 
-                format_type = (
-                    "video"
-                )
+            elif has_audio(fmt):
+                format_type = "audio"
 
             else:
+                continue
 
-                format_type = (
-                    "audio"
-                )
-
-            usable_formats.append(
+            result_formats.append(
                 format_to_public(
                     fmt,
                     format_type,
@@ -1251,64 +1290,67 @@ def debug_youtube():
             )
 
         return {
+            "success": True,
 
-            "success":
-                True,
+            "title": info.get(
+                "title"
+            ),
 
-            "title":
-                info.get("title"),
+            "webpage_url": info.get(
+                "webpage_url"
+            ),
 
-            "platform":
-                "YouTube",
+            "extractor": info.get(
+                "extractor"
+            ),
 
-            "cookies_configured":
-                bool(
-                    YOUTUBE_COOKIES
-                ),
+            "extractor_key": info.get(
+                "extractor_key"
+            ),
 
-            "youtube_cookies_used":
-                True,
+            "format_count": len(
+                formats
+            ),
 
-            "node_available":
-                node_available(),
+            "usable_format_count": len(
+                result_formats
+            ),
+
+            "formats": result_formats,
+
+            "cookies_configured": bool(
+                YOUTUBE_COOKIES
+            ),
+
+            "youtube_cookies_used": bool(
+                cookie_file
+            ),
+
+            "node_available": node_available(),
 
             "ffmpeg_available":
                 ffmpeg_available(),
 
             "ffprobe_available":
                 ffprobe_available(),
-
-            "format_count":
-                len(formats),
-
-            "usable_format_count":
-                len(
-                    usable_formats
-                ),
-
-            "formats":
-                usable_formats,
         }
 
     except Exception as error:
 
         return {
+            "success": False,
 
-            "success":
-                False,
+            "error": clean_yt_error(
+                error
+            ),
 
-            "error":
-                clean_yt_error(
-                    error
-                ),
+            "cookies_configured": bool(
+                YOUTUBE_COOKIES
+            ),
 
-            "cookies_configured":
-                bool(
-                    YOUTUBE_COOKIES
-                ),
-
-            "youtube_cookies_used":
-                True,
+            "youtube_cookies_used": bool(
+                cookie_file
+            ),
 
             "node_available":
                 node_available(),
@@ -1320,7 +1362,11 @@ def debug_youtube():
                 ffprobe_available(),
         }
 
+    finally:
 
+        remove_cookie_file(
+            cookie_file
+        )
 # ============================================================
 # DEBUG FORMATS
 # ============================================================
