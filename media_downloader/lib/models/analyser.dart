@@ -42,21 +42,21 @@ class MediaInfo {
     return MediaInfo(
       success: json['success'] == true,
 
-      title: json['title']?.toString() ??
+      title:
+          json['title']?.toString() ??
           'Unknown title',
 
-      platform: json['platform']?.toString() ??
+      platform:
+          json['platform']?.toString() ??
           'Unknown',
 
       thumbnail:
           json['thumbnail']?.toString(),
 
-      // Safely handles both:
-      // 357
-      // 357.0
-      duration: json['duration'] is num
-          ? (json['duration'] as num).toInt()
-          : null,
+      duration:
+          json['duration'] is num
+              ? (json['duration'] as num).toInt()
+              : null,
 
       uploader:
           json['uploader']?.toString(),
@@ -100,6 +100,10 @@ class MediaInfo {
     );
   }
 
+  // ==========================================================
+  // JSON FORMAT HELPERS
+  // ==========================================================
+
   static List<MediaFormat> _parseFormats(
     dynamic value,
   ) {
@@ -128,8 +132,67 @@ class MediaInfo {
       Map<String, dynamic>.from(value),
     );
   }
+
+  // ==========================================================
+  // COMPATIBILITY METHODS
+  // ==========================================================
+  //
+  // These methods allow your existing HomePage/download logic
+  // to continue working without changing the UI.
+  //
+
+  MediaFormat? getVideo() {
+    // First use backend recommendation.
+    if (recommendedVideo != null) {
+      return recommendedVideo;
+    }
+
+    // Next prefer a progressive format because it already
+    // contains video + audio.
+    if (progressiveFormats.isNotEmpty) {
+      return progressiveFormats.first;
+    }
+
+    // Finally use a video-only format.
+    if (videoFormats.isNotEmpty) {
+      return videoFormats.first;
+    }
+
+    return null;
+  }
+
+  MediaFormat? getAudio() {
+    // First use backend recommendation.
+    if (recommendedAudio != null) {
+      return recommendedAudio;
+    }
+
+    // Prefer a real audio-only format.
+    if (audioFormats.isNotEmpty) {
+      return audioFormats.first;
+    }
+
+    // A progressive format also contains audio.
+    if (progressiveFormats.isNotEmpty) {
+      return progressiveFormats.first;
+    }
+
+    return null;
+  }
+
+  MediaFormat? getBestVideo() {
+    return getVideo();
+  }
+
+  MediaFormat? getBestAudio() {
+    return getAudio();
+  }
 }
 
+
+// ============================================================
+// MEDIA FORMAT
+// ============================================================
 
 class MediaFormat {
   final String formatId;
@@ -173,19 +236,17 @@ class MediaFormat {
     Map<String, dynamic> json,
   ) {
     return MediaFormat(
-
       formatId:
           json['format_id']?.toString() ??
-              '',
+          '',
 
       ext:
           json['ext']?.toString() ??
-              '',
+          '',
 
       resolution:
           json['resolution']?.toString(),
 
-      // Safely handles int and double.
       width:
           json['width'] is num
               ? (json['width'] as num).toInt()
@@ -233,53 +294,43 @@ class MediaFormat {
     );
   }
 
-
   // ==========================================================
-  // VIDEO CHECK
+  // VIDEO
   // ==========================================================
 
   bool get hasVideo {
-
     return vcodec != null &&
         vcodec!.isNotEmpty &&
         vcodec != 'none';
   }
 
-
   // ==========================================================
-  // AUDIO CHECK
+  // AUDIO
   // ==========================================================
 
   bool get hasAudio {
-
     return acodec != null &&
         acodec!.isNotEmpty &&
         acodec != 'none';
   }
 
-
   // ==========================================================
-  // PROGRESSIVE CHECK
+  // PROGRESSIVE
   // ==========================================================
 
   bool get isProgressive {
-
-    return hasVideo &&
-        hasAudio;
+    return hasVideo && hasAudio;
   }
-
 
   // ==========================================================
   // DISPLAY RESOLUTION
   // ==========================================================
 
   String get displayResolution {
-
     if (
       formatNote != null &&
       formatNote!.isNotEmpty
     ) {
-
       return formatNote!;
     }
 
@@ -287,30 +338,25 @@ class MediaFormat {
       resolution != null &&
       resolution!.isNotEmpty
     ) {
-
       return resolution!;
     }
 
     if (height != null) {
-
       return '${height}p';
     }
 
     return 'Unknown quality';
   }
 
-
   // ==========================================================
-  // DISPLAY FILE SIZE
+  // DISPLAY SIZE
   // ==========================================================
 
   String get displaySize {
-
     if (
       filesize == null ||
       filesize! <= 0
     ) {
-
       return 'Unknown size';
     }
 
@@ -319,32 +365,26 @@ class MediaFormat {
         (1024 * 1024);
 
     if (mb >= 1024) {
-
       return '${(mb / 1024).toStringAsFixed(1)} GB';
     }
 
     return '${mb.toStringAsFixed(1)} MB';
   }
 
-
   // ==========================================================
   // DISPLAY TYPE
   // ==========================================================
 
   String get displayType {
-
     if (isProgressive) {
-
       return 'Video + Audio';
     }
 
     if (hasVideo) {
-
       return 'Video only';
     }
 
     if (hasAudio) {
-
       return 'Audio only';
     }
 
