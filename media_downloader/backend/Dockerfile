@@ -2,10 +2,6 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
-# ------------------------------------------------------------
-# Install FFmpeg and Node.js
-# ------------------------------------------------------------
-
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         ffmpeg \
@@ -13,36 +9,26 @@ RUN apt-get update \
         npm \
     && rm -rf /var/lib/apt/lists/*
 
-# ------------------------------------------------------------
-# Python dependencies
-# ------------------------------------------------------------
-
 COPY requirements.txt .
 
 RUN pip install --no-cache-dir -r requirements.txt
 
-# ------------------------------------------------------------
-# Application
-# ------------------------------------------------------------
-
 COPY . .
-
-# ------------------------------------------------------------
-# Verify important dependencies during build
-# ------------------------------------------------------------
 
 RUN echo "===== NODE =====" \
     && node --version
 
+RUN echo "===== NPM =====" \
+    && npm --version
+
 RUN echo "===== FFMPEG =====" \
     && ffmpeg -version
 
+RUN echo "===== FFPROBE =====" \
+    && ffprobe -version
+
 RUN echo "===== YT-DLP =====" \
     && python -m yt_dlp --version
-
-# ------------------------------------------------------------
-# Render
-# ------------------------------------------------------------
 
 EXPOSE 10000
 
