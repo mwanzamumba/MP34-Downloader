@@ -221,6 +221,7 @@ class _HomepageState extends State<Homepage> {
        */
       await DownloadService.download(
         media: media,
+        sourceUrl: _urlController.text.trim(),
         format: selectedMediaFormat.formatId,
         cancelToken: _cancelToken!,
         onProgress: (value, status) {
