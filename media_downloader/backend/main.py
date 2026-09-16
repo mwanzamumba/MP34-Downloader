@@ -1,4 +1,5 @@
 import os
+import shutil
 import tempfile
 from pathlib import Path
 from urllib.parse import urlparse
@@ -834,3 +835,13 @@ async def validate_streams(data: dict):
             ),
         )
 
+@app.get("/debug-youtube")
+def debug_youtube():
+    cookies = os.getenv("YOUTUBE_COOKIES", "")
+
+    return {
+        "cookies_configured": bool(cookies),
+        "cookies_length": len(cookies),
+        "cookies_header": cookies[:40] if cookies else "",
+        "node_available": shutil.which("node") is not None,
+    }
