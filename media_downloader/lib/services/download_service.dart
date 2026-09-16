@@ -4,11 +4,14 @@ import 'package:dio/dio.dart';
 import 'package:path_provider/path_provider.dart';
 
 import '../models/analyser.dart';
-import 'media_processor.dart';
+import '../services/media_api.dart';
 import 'media_store_service.dart';
 import 'notification_service.dart';
 
 class DownloadService {
+  static const String _baseUrl =
+      'https://mp34-downloader.onrender.com';
+
   static Future<void> download({
     required dynamic media,
     required String format,
@@ -19,18 +22,13 @@ class DownloadService {
 
     final safeName = _safeFileName(media.title);
 
-    // Give every download a unique temporary filename.
-    final timestamp = DateTime.now().millisecondsSinceEpoch;
+    final timestamp =
+        DateTime.now().millisecondsSinceEpoch;
 
-    final videoPath =
-        '${tempDirectory.path}/${safeName}_$timestamp.video.mp4';
+    final extension = format == 'mp3' ? 'mp3' : 'mp4';
 
-    final audioPath =
-        '${tempDirectory.path}/${safeName}_$timestamp.audio.m4a';
-
-    final outputPath = format == 'mp4'
-        ? '${tempDirectory.path}/${safeName}_$timestamp.mp4'
-        : '${tempDirectory.path}/${safeName}_$timestamp.mp3';
+    final outputPath =
+        '${tempDirectory.path}/${safeName}_$timestamp.$extension';
 
     try {
       await NotificationService.showStarted(
@@ -38,24 +36,36 @@ class DownloadService {
         format: format.toUpperCase(),
       );
 
-      if (format == 'mp3') {
-        await _downloadMp3(
-          media: media,
-          audioPath: audioPath,
-          outputPath: outputPath,
-          cancelToken: cancelToken,
-          onProgress: onProgress,
-        );
-      } else {
-        await _downloadMp4(
-          media: media,
-          videoPath: videoPath,
-          audioPath: audioPath,
-          outputPath: outputPath,
-          cancelToken: cancelToken,
-          onProgress: onProgress,
-        );
-      }
+      onProgress(
+        0.02,
+        'Preparing download...',
+      );
+
+      final MediaApi api = MediaApi();
+
+      print('');
+      print('========================================');
+      print('BACKEND DOWNLOAD');
+      print('========================================');
+      print('Title: ${media.title}');
+      print('Format: $format');
+      print('URL: ${media.sourceUrl ?? media.url ?? 'unknown'}');
+      print('========================================');
+
+      /*
+       * Ask the Render backend to create the final media file.
+       *
+       * IMPORTANT:
+       * The backend now performs the video/audio merging.
+       * Flutter does NOT use FFmpegKit.
+       */
+
+      final String downloadUrl = await api.download(
+        url: media.sourceUrl ?? media.url,
+        formatId: _getFormatId(media, format),
+        mediaType: format == 'mp3' ? 'audio' : 'video',
+        audioFormat: format == 'mp3' ? 'mp3' : null,
+      );
 
       if (cancelToken.isCancelled) {
         throw DioException(
@@ -64,32 +74,95 @@ class DownloadService {
         );
       }
 
+      print('');
+      print('========================================');
+      print('BACKEND FILE READY');
+      print('========================================');
+      print('Download URL: $downloadUrl');
+      print('========================================');
+
+      onProgress(
+        0.25,
+        'Downloading ${format.toUpperCase()}...',
+      );
+
+      /*
+       * Download the already-created final file
+       * from Render to the phone.
+       */
+
+      await _downloadFinalFile(
+        url: downloadUrl,
+        path: outputPath,
+        cancelToken: cancelToken,
+        onProgress: (value) {
+          final progress =
+              0.25 + (value * 0.70);
+
+          onProgress(
+            progress.clamp(0.25, 0.95),
+            'Downloading ${format.toUpperCase()}... '
+            '${(value * 100).round()}%',
+          );
+        },
+      );
+
+      if (cancelToken.isCancelled) {
+        throw DioException(
+          requestOptions: RequestOptions(path: ''),
+          type: DioExceptionType.cancel,
+        );
+      }
+
+      /*
+       * Verify that the file actually exists.
+       */
+
+      final file = File(outputPath);
+
+      final exists = await file.exists();
+
+      if (!exists) {
+        throw Exception(
+          'Downloaded file was not created.',
+        );
+      }
+
+      final fileSize = await file.length();
+
+      print('');
+      print('========================================');
+      print('FINAL DOWNLOAD');
+      print('========================================');
+      print('Path: $outputPath');
+      print('Exists: $exists');
+      print('Size: $fileSize bytes');
+      print('========================================');
+
+      if (fileSize <= 0) {
+        throw Exception(
+          'Downloaded file is empty.',
+        );
+      }
+
       onProgress(
         0.97,
         'Saving to your phone...',
       );
 
-      print('');
-      print('========================================');
-      print('FINAL SAVE');
-      print('========================================');
-      print('Format: $format');
-      print('Temporary output: $outputPath');
-      print('File exists: ${await File(outputPath).exists()}');
-      print('File size: ${await File(outputPath).length()} bytes');
-      print('========================================');
+      /*
+       * Save the finished file to Android storage.
+       */
 
-      if (format == 'mp4') {
-        await MediaStoreService.saveVideo(
-          filePath: outputPath,
-
-          // The timestamp is removed from the final visible name.
-          fileName: '$safeName.mp4',
-        );
-      } else {
+      if (format == 'mp3') {
         await MediaStoreService.saveAudio(
           filePath: outputPath,
           fileName: '$safeName.mp3',
+        );
+      } else {
+        await MediaStoreService.saveVideo(
+          filePath: outputPath,
+          fileName: '$safeName.mp4',
         );
       }
 
@@ -102,157 +175,52 @@ class DownloadService {
         title: media.title,
         format: format.toUpperCase(),
       );
+
+      print('');
+      print('========================================');
+      print('DOWNLOAD COMPLETE');
+      print('========================================');
     } finally {
-      await _deleteIfExists(videoPath);
-      await _deleteIfExists(audioPath);
       await _deleteIfExists(outputPath);
     }
   }
 
   // ============================================================
-  // MP4
+  // GET FORMAT ID
   // ============================================================
 
-  static Future<void> _downloadMp4({
-    required dynamic media,
-    required String videoPath,
-    required String audioPath,
-    required String outputPath,
-    required CancelToken cancelToken,
-    required void Function(double progress, String status) onProgress,
-  }) async {
-    onProgress(
-      0.01,
-      'Downloading video and audio...',
-    );
+  static String _getFormatId(
+    dynamic media,
+    String format,
+  ) {
+    if (format == 'mp3') {
+      final audio = media.audio;
 
-    double videoProgress = 0;
-    double audioProgress = 0;
-
-    final videoFuture = _downloadStream(
-      url: media.video.url,
-      path: videoPath,
-      cancelToken: cancelToken,
-      onProgress: (value) {
-        videoProgress = value;
-
-        final combined =
-            (videoProgress * 0.70) +
-            (audioProgress * 0.20);
-
-        onProgress(
-          combined,
-          'Downloading video... '
-          '${(videoProgress * 100).round()}%',
+      if (audio == null) {
+        throw Exception(
+          'No audio format is available.',
         );
-      },
-    );
+      }
 
-    final audioFuture = _downloadStream(
-      url: media.audio.url,
-      path: audioPath,
-      cancelToken: cancelToken,
-      onProgress: (value) {
-        audioProgress = value;
+      return audio.formatId.toString();
+    }
 
-        final combined =
-            (videoProgress * 0.70) +
-            (audioProgress * 0.20);
+    final video = media.video;
 
-        onProgress(
-          combined,
-          'Downloading audio... '
-          '${(audioProgress * 100).round()}%',
-        );
-      },
-    );
-
-    await Future.wait([
-      videoFuture,
-      audioFuture,
-    ]);
-
-    if (cancelToken.isCancelled) {
-      throw DioException(
-        requestOptions: RequestOptions(path: ''),
-        type: DioExceptionType.cancel,
+    if (video == null) {
+      throw Exception(
+        'No video format is available.',
       );
     }
 
-    onProgress(
-      0.91,
-      'Combining video and audio...',
-    );
-
-    await MediaProcessor.mergeToMp4(
-      videoPath: videoPath,
-      audioPath: audioPath,
-      outputPath: outputPath,
-    );
-
-    onProgress(
-      0.96,
-      'Preparing final MP4...',
-    );
+    return video.formatId.toString();
   }
 
   // ============================================================
-  // MP3
+  // DOWNLOAD FINAL FILE
   // ============================================================
 
-  static Future<void> _downloadMp3({
-    required dynamic media,
-    required String audioPath,
-    required String outputPath,
-    required CancelToken cancelToken,
-    required void Function(double progress, String status) onProgress,
-  }) async {
-    onProgress(
-      0.01,
-      'Downloading audio...',
-    );
-
-    await _downloadStream(
-      url: media.audio.url,
-      path: audioPath,
-      cancelToken: cancelToken,
-      onProgress: (value) {
-        onProgress(
-          value * 0.80,
-          'Downloading audio... '
-          '${(value * 100).round()}%',
-        );
-      },
-    );
-
-    if (cancelToken.isCancelled) {
-      throw DioException(
-        requestOptions: RequestOptions(path: ''),
-        type: DioExceptionType.cancel,
-      );
-    }
-
-    onProgress(
-      0.88,
-      'Converting to MP3...',
-    );
-
-    await MediaProcessor.convertToMp3(
-      audioPath: audioPath,
-      outputPath: outputPath,
-    );
-
-    onProgress(
-      0.96,
-      'Preparing final MP3...',
-    );
-  }
-
-  // ============================================================
-  // STREAM DOWNLOAD
-  // ============================================================
-
-  static Future<void> _downloadStream({
+  static Future<void> _downloadFinalFile({
     required String url,
     required String path,
     required CancelToken cancelToken,
@@ -260,9 +228,12 @@ class DownloadService {
   }) async {
     final dio = Dio(
       BaseOptions(
-        connectTimeout: const Duration(seconds: 30),
-        receiveTimeout: const Duration(minutes: 10),
-        sendTimeout: const Duration(seconds: 30),
+        connectTimeout:
+            const Duration(seconds: 30),
+        receiveTimeout:
+            const Duration(minutes: 20),
+        sendTimeout:
+            const Duration(seconds: 30),
         headers: {
           'User-Agent':
               'Mozilla/5.0 (Linux; Android 10) '
@@ -274,21 +245,37 @@ class DownloadService {
       ),
     );
 
-    await dio.download(
-      url,
-      path,
-      cancelToken: cancelToken,
-      deleteOnError: true,
-      onReceiveProgress: (received, total) {
-        if (total <= 0) {
-          return;
-        }
+    try {
+      await dio.download(
+        url,
+        path,
+        cancelToken: cancelToken,
+        deleteOnError: true,
+        onReceiveProgress: (received, total) {
+          if (total <= 0) {
+            return;
+          }
 
-        onProgress(
-          (received / total).clamp(0.0, 1.0),
-        );
-      },
-    );
+          final progress =
+              (received / total)
+                  .clamp(0.0, 1.0);
+
+          onProgress(progress);
+        },
+      );
+    } on DioException catch (e) {
+      print('');
+      print('========================================');
+      print('FILE DOWNLOAD ERROR');
+      print('========================================');
+      print('Type: ${e.type}');
+      print('Message: ${e.message}');
+      print('Status: ${e.response?.statusCode}');
+      print('Response: ${e.response?.data}');
+      print('========================================');
+
+      rethrow;
+    }
   }
 
   // ============================================================
@@ -318,7 +305,9 @@ class DownloadService {
   // CLEANUP
   // ============================================================
 
-  static Future<void> _deleteIfExists(String path) async {
+  static Future<void> _deleteIfExists(
+    String path,
+  ) async {
     try {
       final file = File(path);
 
@@ -326,7 +315,7 @@ class DownloadService {
         await file.delete();
       }
     } catch (_) {
-      // Temporary cleanup should never crash the download.
+      // Temporary cleanup should never crash download.
     }
   }
 }
