@@ -219,8 +219,6 @@ def get_ytdlp_options(
 
     options = {
 
-        # Do not allow external yt-dlp
-        # configuration files to interfere.
         "ignoreconfig": True,
 
         "noplaylist": True,
@@ -246,8 +244,6 @@ def get_ytdlp_options(
         ] = cookie_file
 
     return options
-
-
 # ============================================================
 # FORMAT HELPERS
 # ============================================================
