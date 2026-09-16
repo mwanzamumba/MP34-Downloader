@@ -21,7 +21,7 @@ from pydantic import BaseModel
 # APPLICATION CONFIGURATION
 # ============================================================
 
-APP_VERSION = "3.0.0"
+APP_VERSION = "3.1.0"
 
 BASE_DIR = Path(__file__).resolve().parent
 
@@ -58,7 +58,6 @@ app = FastAPI(
     version=APP_VERSION,
 )
 
-
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -73,18 +72,13 @@ app.add_middleware(
 # ============================================================
 
 class AnalyzeRequest(BaseModel):
-
     url: str
 
 
 class DownloadRequest(BaseModel):
-
     url: str
-
     format_id: Optional[str] = None
-
     media_type: str = "video"
-
     audio_format: Optional[str] = "mp3"
 
 
@@ -199,6 +193,7 @@ def remove_cookie_file(
         if os.path.exists(
             cookie_file
         ):
+
             os.remove(
                 cookie_file
             )
@@ -237,13 +232,40 @@ def get_ytdlp_options(
             skip_download,
     }
 
+    # --------------------------------------------------------
+    # YouTube
+    #
+    # Current yt-dlp versions can select clients such as
+    # tv_downgraded when cookies are supplied. That client
+    # has had current 403/playability problems.
+    #
+    # We explicitly use default + web_embedded instead.
+    # --------------------------------------------------------
+
     if cookie_file:
 
         options[
             "cookiefile"
         ] = cookie_file
 
+        options[
+            "extractor_args"
+        ] = {
+
+            "youtube": {
+
+                "player_client": [
+                    "default",
+                    "web_embedded",
+                ]
+
+            }
+
+        }
+
     return options
+
+
 # ============================================================
 # FORMAT HELPERS
 # ============================================================
@@ -335,10 +357,7 @@ def format_to_public(
         fmt.get("height")
     )
 
-    if (
-        width
-        and height
-    ):
+    if width and height:
 
         resolution = (
             f"{width}x{height}"
@@ -347,9 +366,7 @@ def format_to_public(
     else:
 
         resolution = (
-            fmt.get(
-                "resolution"
-            )
+            fmt.get("resolution")
         )
 
     return {
@@ -380,7 +397,7 @@ def format_to_public(
             ),
 
         "filesize":
-            (
+            safe_int(
                 fmt.get("filesize")
                 or
                 fmt.get(
@@ -449,23 +466,19 @@ def collect_formats(
             )
         )
 
-        # YouTube storyboard formats
-        # are not downloadable media.
+        # Skip YouTube storyboard formats.
         if format_id.startswith(
             "sb"
         ):
             continue
 
-        if not has_video(
-            fmt
-        ) and not has_audio(
-            fmt
+        if (
+            not has_video(fmt)
+            and not has_audio(fmt)
         ):
             continue
 
-        if is_progressive(
-            fmt
-        ):
+        if is_progressive(fmt):
 
             progressive_formats.append(
                 format_to_public(
@@ -474,9 +487,7 @@ def collect_formats(
                 )
             )
 
-        elif has_video(
-            fmt
-        ):
+        elif has_video(fmt):
 
             video_formats.append(
                 format_to_public(
@@ -485,9 +496,7 @@ def collect_formats(
                 )
             )
 
-        elif has_audio(
-            fmt
-        ):
+        elif has_audio(fmt):
 
             audio_formats.append(
                 format_to_public(
@@ -574,8 +583,10 @@ def extract_media_info(
 
     try:
 
-        # YouTube requires the
-        # configured cookies on Render.
+        # ----------------------------------------------------
+        # YouTube cookies
+        # ----------------------------------------------------
+
         if platform == "YouTube":
 
             if YOUTUBE_COOKIES:
@@ -610,12 +621,7 @@ def extract_media_info(
 
 
 # ============================================================
-# RECOMMENDED FORMAT
-#
-# IMPORTANT:
-# We don't invent a format.
-# We only choose one from the formats
-# actually returned by yt-dlp.
+# RECOMMENDED VIDEO
 # ============================================================
 
 def choose_recommended_video(
@@ -625,9 +631,8 @@ def choose_recommended_video(
 
     candidates = []
 
-    # Progressive formats are preferred
-    # because they already contain video
-    # and audio in one file.
+    # Prefer progressive formats because they
+    # already contain video + audio.
     candidates.extend(
         progressive_formats
     )
@@ -641,8 +646,12 @@ def choose_recommended_video(
         return None
 
     usable = [
+
         item
-        for item in candidates
+
+        for item
+        in candidates
+
         if item.get("height")
     ]
 
@@ -652,10 +661,17 @@ def choose_recommended_video(
 
     # Prefer formats up to 720p.
     under_720 = [
+
         item
-        for item in usable
-        if item.get("height")
-        and item["height"] <= 720
+
+        for item
+        in usable
+
+        if (
+            item.get("height")
+            and
+            item["height"] <= 720
+        )
     ]
 
     if under_720:
@@ -663,9 +679,12 @@ def choose_recommended_video(
         usable = under_720
 
     usable.sort(
+
         key=lambda item: (
+
             item.get("height")
             or 0,
+
             item.get("fps")
             or 0,
         )
@@ -673,6 +692,10 @@ def choose_recommended_video(
 
     return usable[-1]
 
+
+# ============================================================
+# RECOMMENDED AUDIO
+# ============================================================
 
 def choose_recommended_audio(
     audio_formats: list,
@@ -683,10 +706,13 @@ def choose_recommended_audio(
         return None
 
     usable = [
+
         item
-        for item in audio_formats
-        if item.get("abr")
-        is not None
+
+        for item
+        in audio_formats
+
+        if item.get("abr") is not None
     ]
 
     if not usable:
@@ -694,7 +720,9 @@ def choose_recommended_audio(
         return audio_formats[0]
 
     usable.sort(
+
         key=lambda item: (
+
             item.get("abr")
             or 0
         )
@@ -724,13 +752,9 @@ def root():
         "platforms": [
 
             "YouTube",
-
             "Facebook",
-
             "Instagram",
-
             "TikTok",
-
             "X",
         ],
     }
@@ -768,9 +792,7 @@ def version():
 
     except Exception:
 
-        yt_version = (
-            "unknown"
-        )
+        yt_version = "unknown"
 
     return {
 
@@ -797,17 +819,7 @@ def version():
 
 
 # ============================================================
-# DIRECT YT-DLP YOUTUBE DIAGNOSTIC
-#
-# This intentionally runs the same style of
-# command that worked locally:
-#
-# python -m yt_dlp
-# --js-runtimes node
-# --cookies cookies.txt
-# --simulate URL
-#
-# We are NOT specifying a format.
+# DEBUG YOUTUBE
 # ============================================================
 
 @app.get("/debug-youtube")
@@ -830,26 +842,24 @@ def debug_youtube():
         command = [
 
             "python",
-
             "-m",
-
             "yt_dlp",
 
             "--js-runtimes",
-
             "node",
 
             "--simulate",
 
             "--no-playlist",
 
+            "--extractor-args",
+            "youtube:player_client=default,web_embedded",
+
             test_url,
         ]
 
-        # Add cookies only when configured.
         if cookie_file:
 
-            # Insert before the URL.
             command.insert(
                 len(command) - 1,
                 "--cookies",
@@ -897,12 +907,7 @@ def debug_youtube():
             "========================================"
         )
 
-        print(
-            "[DEBUG] Command:"
-        )
-
-        # Do NOT print the actual cookie
-        # contents or cookie file contents.
+        # Never print cookie contents.
         safe_command = []
 
         skip_next = False
@@ -932,6 +937,10 @@ def debug_youtube():
             safe_command.append(
                 item
             )
+
+        print(
+            "[DEBUG] Command:"
+        )
 
         print(
             " ".join(
@@ -1013,8 +1022,7 @@ def debug_youtube():
 
         return {
 
-            "success":
-                False,
+            "success": False,
 
             "error":
                 "yt-dlp test timed out after 180 seconds.",
@@ -1043,11 +1051,9 @@ def debug_youtube():
 
         return {
 
-            "success":
-                False,
+            "success": False,
 
-            "error":
-                str(error),
+            "error": str(error),
 
             "cookies_configured":
                 bool(
@@ -1078,9 +1084,6 @@ def debug_youtube():
 
 # ============================================================
 # ANALYZE ENDPOINT
-#
-# This endpoint discovers the formats that yt-dlp
-# actually receives.
 # ============================================================
 
 @app.post("/analyze")
@@ -1137,8 +1140,7 @@ def analyze(
 
         return {
 
-            "success":
-                True,
+            "success": True,
 
             "title":
                 info.get(
@@ -1154,8 +1156,10 @@ def analyze(
                 ),
 
             "duration":
-                info.get(
-                    "duration"
+                safe_int(
+                    info.get(
+                        "duration"
+                    )
                 ),
 
             "uploader":
@@ -1215,13 +1219,6 @@ def analyze(
 
 # ============================================================
 # DOWNLOAD ENDPOINT
-#
-# IMPORTANT:
-#
-# If format_id is supplied, we use EXACTLY that
-# format_id returned by /analyze.
-#
-# We do not invent a format.
 # ============================================================
 
 @app.post("/download")
@@ -1241,9 +1238,7 @@ def download(
 
         raise HTTPException(
             status_code=400,
-            detail=(
-                "Unsupported platform."
-            ),
+            detail="Unsupported platform.",
         )
 
     job_id = uuid.uuid4().hex
@@ -1270,7 +1265,7 @@ def download(
                 )
 
         # ====================================================
-        # AUDIO DOWNLOAD
+        # AUDIO
         # ====================================================
 
         if (
@@ -1286,13 +1281,9 @@ def download(
             allowed_audio = [
 
                 "mp3",
-
                 "m4a",
-
                 "wav",
-
                 "opus",
-
                 "flac",
             ]
 
@@ -1316,11 +1307,6 @@ def download(
                 )
             )
 
-            # If Flutter sends a real format_id,
-            # download exactly that format.
-            #
-            # Otherwise use the best audio
-            # format available.
             if request.format_id:
 
                 options["format"] = (
@@ -1333,13 +1319,11 @@ def download(
                     "bestaudio/best"
                 )
 
-            options[
-                "outtmpl"
-            ] = output_template
+            options["outtmpl"] = (
+                output_template
+            )
 
-            options[
-                "postprocessors"
-            ] = [
+            options["postprocessors"] = [
 
                 {
 
@@ -1355,7 +1339,7 @@ def download(
             ]
 
         # ====================================================
-        # VIDEO DOWNLOAD
+        # VIDEO
         # ====================================================
 
         else:
@@ -1375,21 +1359,12 @@ def download(
 
             if request.format_id:
 
-                # THIS IS THE IMPORTANT PART:
-                #
-                # Flutter gives us the exact format
-                # discovered by /analyze.
                 options["format"] = (
                     request.format_id
                 )
 
             else:
 
-                # Only used when Flutter does not
-                # provide a format.
-                #
-                # We first prefer a progressive
-                # MP4 that already has video+audio.
                 options["format"] = (
                     "best[ext=mp4]"
                     "[vcodec!=none]"
@@ -1398,16 +1373,16 @@ def download(
                     "/best"
                 )
 
-            options[
-                "outtmpl"
-            ] = output_template
+            options["outtmpl"] = (
+                output_template
+            )
 
             options[
                 "merge_output_format"
             ] = "mp4"
 
         # ====================================================
-        # START DOWNLOAD
+        # DOWNLOAD
         # ====================================================
 
         with yt_dlp.YoutubeDL(
@@ -1420,7 +1395,7 @@ def download(
             )
 
         # ====================================================
-        # FIND DOWNLOADED FILE
+        # FIND OUTPUT FILE
         # ====================================================
 
         files = [
@@ -1520,7 +1495,6 @@ def serve_file(
     filename: str,
 ):
 
-    # Prevent directory traversal.
     safe_filename = Path(
         filename
     ).name
@@ -1564,9 +1538,7 @@ def cleanup_old_files():
         return
 
     current_time = (
-        os.path.getmtime(
-            DOWNLOAD_DIR
-        )
+        __import__("time").time()
     )
 
     for job_dir in (

@@ -36,39 +36,96 @@ class MediaInfo {
     this.recommendedAudio,
   });
 
-  factory MediaInfo.fromJson(Map<String, dynamic> json) {
+  factory MediaInfo.fromJson(
+    Map<String, dynamic> json,
+  ) {
     return MediaInfo(
-      success: json['success'] ?? false,
-      title: json['title'] ?? 'Unknown title',
-      platform: json['platform'] ?? 'Unknown',
-      thumbnail: json['thumbnail'],
-      duration: json['duration'],
-      uploader: json['uploader'],
-      channel: json['channel'],
-      webpageUrl: json['webpage_url'],
+      success: json['success'] == true,
 
-      hasVideo: json['has_video'] ?? false,
-      hasAudio: json['has_audio'] ?? false,
+      title: json['title']?.toString() ??
+          'Unknown title',
 
-      videoFormats: (json['video_formats'] as List? ?? [])
-          .map((item) => MediaFormat.fromJson(item))
-          .toList(),
+      platform: json['platform']?.toString() ??
+          'Unknown',
 
-      audioFormats: (json['audio_formats'] as List? ?? [])
-          .map((item) => MediaFormat.fromJson(item))
-          .toList(),
+      thumbnail:
+          json['thumbnail']?.toString(),
 
-      progressiveFormats: (json['progressive_formats'] as List? ?? [])
-          .map((item) => MediaFormat.fromJson(item))
-          .toList(),
-
-      recommendedVideo: json['recommended_video'] != null
-          ? MediaFormat.fromJson(json['recommended_video'])
+      // Safely handles both:
+      // 357
+      // 357.0
+      duration: json['duration'] is num
+          ? (json['duration'] as num).toInt()
           : null,
 
-      recommendedAudio: json['recommended_audio'] != null
-          ? MediaFormat.fromJson(json['recommended_audio'])
-          : null,
+      uploader:
+          json['uploader']?.toString(),
+
+      channel:
+          json['channel']?.toString(),
+
+      webpageUrl:
+          json['webpage_url']?.toString(),
+
+      hasVideo:
+          json['has_video'] == true,
+
+      hasAudio:
+          json['has_audio'] == true,
+
+      videoFormats:
+          _parseFormats(
+        json['video_formats'],
+      ),
+
+      audioFormats:
+          _parseFormats(
+        json['audio_formats'],
+      ),
+
+      progressiveFormats:
+          _parseFormats(
+        json['progressive_formats'],
+      ),
+
+      recommendedVideo:
+          _parseSingleFormat(
+        json['recommended_video'],
+      ),
+
+      recommendedAudio:
+          _parseSingleFormat(
+        json['recommended_audio'],
+      ),
+    );
+  }
+
+  static List<MediaFormat> _parseFormats(
+    dynamic value,
+  ) {
+    if (value is! List) {
+      return [];
+    }
+
+    return value
+        .whereType<Map>()
+        .map(
+          (item) => MediaFormat.fromJson(
+            Map<String, dynamic>.from(item),
+          ),
+        )
+        .toList();
+  }
+
+  static MediaFormat? _parseSingleFormat(
+    dynamic value,
+  ) {
+    if (value is! Map) {
+      return null;
+    }
+
+    return MediaFormat.fromJson(
+      Map<String, dynamic>.from(value),
     );
   }
 }
@@ -112,101 +169,182 @@ class MediaFormat {
     this.formatType,
   });
 
-  factory MediaFormat.fromJson(Map<String, dynamic> json) {
+  factory MediaFormat.fromJson(
+    Map<String, dynamic> json,
+  ) {
     return MediaFormat(
-      formatId: json['format_id']?.toString() ?? '',
-      ext: json['ext']?.toString() ?? '',
-      resolution: json['resolution']?.toString(),
 
-      width: json['width'] is num
-          ? (json['width'] as num).toInt()
-          : null,
+      formatId:
+          json['format_id']?.toString() ??
+              '',
 
-      height: json['height'] is num
-          ? (json['height'] as num).toInt()
-          : null,
+      ext:
+          json['ext']?.toString() ??
+              '',
 
-      fps: json['fps'] is num
-          ? (json['fps'] as num).toDouble()
-          : null,
+      resolution:
+          json['resolution']?.toString(),
 
-      filesize: json['filesize'] is num
-          ? (json['filesize'] as num).toInt()
-          : null,
+      // Safely handles int and double.
+      width:
+          json['width'] is num
+              ? (json['width'] as num).toInt()
+              : null,
 
-      vcodec: json['vcodec']?.toString(),
-      acodec: json['acodec']?.toString(),
+      height:
+          json['height'] is num
+              ? (json['height'] as num).toInt()
+              : null,
 
-      abr: json['abr'] is num
-          ? (json['abr'] as num).toDouble()
-          : null,
+      fps:
+          json['fps'] is num
+              ? (json['fps'] as num).toDouble()
+              : null,
 
-      vbr: json['vbr'] is num
-          ? (json['vbr'] as num).toDouble()
-          : null,
+      filesize:
+          json['filesize'] is num
+              ? (json['filesize'] as num).toInt()
+              : null,
 
-      formatNote: json['format_note']?.toString(),
-      protocol: json['protocol']?.toString(),
-      formatType: json['format_type']?.toString(),
+      vcodec:
+          json['vcodec']?.toString(),
+
+      acodec:
+          json['acodec']?.toString(),
+
+      abr:
+          json['abr'] is num
+              ? (json['abr'] as num).toDouble()
+              : null,
+
+      vbr:
+          json['vbr'] is num
+              ? (json['vbr'] as num).toDouble()
+              : null,
+
+      formatNote:
+          json['format_note']?.toString(),
+
+      protocol:
+          json['protocol']?.toString(),
+
+      formatType:
+          json['format_type']?.toString(),
     );
   }
 
+
+  // ==========================================================
+  // VIDEO CHECK
+  // ==========================================================
+
   bool get hasVideo {
+
     return vcodec != null &&
         vcodec!.isNotEmpty &&
         vcodec != 'none';
   }
 
+
+  // ==========================================================
+  // AUDIO CHECK
+  // ==========================================================
+
   bool get hasAudio {
+
     return acodec != null &&
         acodec!.isNotEmpty &&
         acodec != 'none';
   }
 
+
+  // ==========================================================
+  // PROGRESSIVE CHECK
+  // ==========================================================
+
   bool get isProgressive {
-    return hasVideo && hasAudio;
+
+    return hasVideo &&
+        hasAudio;
   }
 
+
+  // ==========================================================
+  // DISPLAY RESOLUTION
+  // ==========================================================
+
   String get displayResolution {
-    if (formatNote != null && formatNote!.isNotEmpty) {
+
+    if (
+      formatNote != null &&
+      formatNote!.isNotEmpty
+    ) {
+
       return formatNote!;
     }
 
-    if (resolution != null && resolution!.isNotEmpty) {
+    if (
+      resolution != null &&
+      resolution!.isNotEmpty
+    ) {
+
       return resolution!;
     }
 
     if (height != null) {
+
       return '${height}p';
     }
 
     return 'Unknown quality';
   }
 
+
+  // ==========================================================
+  // DISPLAY FILE SIZE
+  // ==========================================================
+
   String get displaySize {
-    if (filesize == null || filesize! <= 0) {
+
+    if (
+      filesize == null ||
+      filesize! <= 0
+    ) {
+
       return 'Unknown size';
     }
 
-    final mb = filesize! / (1024 * 1024);
+    final double mb =
+        filesize! /
+        (1024 * 1024);
 
     if (mb >= 1024) {
+
       return '${(mb / 1024).toStringAsFixed(1)} GB';
     }
 
     return '${mb.toStringAsFixed(1)} MB';
   }
 
+
+  // ==========================================================
+  // DISPLAY TYPE
+  // ==========================================================
+
   String get displayType {
+
     if (isProgressive) {
+
       return 'Video + Audio';
     }
 
     if (hasVideo) {
+
       return 'Video only';
     }
 
     if (hasAudio) {
+
       return 'Audio only';
     }
 
