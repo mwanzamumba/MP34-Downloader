@@ -2,9 +2,7 @@ class MediaInfo {
   final String title;
   final String platform;
   final String? thumbnail;
-
   final int? duration;
-
   final String? uploader;
   final String? channel;
 
@@ -39,22 +37,24 @@ class MediaInfo {
   ) {
     return MediaInfo(
       title:
-          json['title'] as String? ?? 'Unknown title',
+          json['title']?.toString() ??
+              'Unknown title',
 
       platform:
-          json['platform'] as String? ?? 'Unknown',
+          json['platform']?.toString() ??
+              'Unknown',
 
       thumbnail:
-          json['thumbnail'] as String?,
+          json['thumbnail']?.toString(),
 
       duration:
           (json['duration'] as num?)?.toInt(),
 
       uploader:
-          json['uploader'] as String?,
+          json['uploader']?.toString(),
 
       channel:
-          json['channel'] as String?,
+          json['channel']?.toString(),
 
       hasVideo:
           json['has_video'] == true,
@@ -65,14 +65,16 @@ class MediaInfo {
       recommendedVideo:
           json['recommended_video'] != null
               ? MediaFormat.fromJson(
-                  json['recommended_video'],
+                  json['recommended_video']
+                      as Map<String, dynamic>,
                 )
               : null,
 
       recommendedAudio:
           json['recommended_audio'] != null
               ? MediaFormat.fromJson(
-                  json['recommended_audio'],
+                  json['recommended_audio']
+                      as Map<String, dynamic>,
                 )
               : null,
 
@@ -80,7 +82,7 @@ class MediaInfo {
           (json['video_formats'] as List? ?? [])
               .map(
                 (item) => MediaFormat.fromJson(
-                  item,
+                  item as Map<String, dynamic>,
                 ),
               )
               .toList(),
@@ -89,7 +91,7 @@ class MediaInfo {
           (json['audio_formats'] as List? ?? [])
               .map(
                 (item) => MediaFormat.fromJson(
-                  item,
+                  item as Map<String, dynamic>,
                 ),
               )
               .toList(),
@@ -98,7 +100,7 @@ class MediaInfo {
           (json['progressive_formats'] as List? ?? [])
               .map(
                 (item) => MediaFormat.fromJson(
-                  item,
+                  item as Map<String, dynamic>,
                 ),
               )
               .toList(),
@@ -110,6 +112,7 @@ class MediaInfo {
 class MediaFormat {
   final String formatId;
   final String type;
+
   final String? ext;
   final String? formatNote;
 
@@ -161,13 +164,13 @@ class MediaFormat {
           json['format_id']?.toString() ?? '',
 
       type:
-          json['type'] as String? ?? '',
+          json['type']?.toString() ?? '',
 
       ext:
-          json['ext'] as String?,
+          json['ext']?.toString(),
 
       formatNote:
-          json['format_note'] as String?,
+          json['format_note']?.toString(),
 
       width:
           (json['width'] as num?)?.toInt(),
@@ -176,16 +179,16 @@ class MediaFormat {
           (json['height'] as num?)?.toInt(),
 
       resolution:
-          json['resolution'] as String?,
+          json['resolution']?.toString(),
 
       fps:
           (json['fps'] as num?)?.toDouble(),
 
       vcodec:
-          json['vcodec'] as String?,
+          json['vcodec']?.toString(),
 
       acodec:
-          json['acodec'] as String?,
+          json['acodec']?.toString(),
 
       abr:
           (json['abr'] as num?)?.toDouble(),
@@ -215,19 +218,22 @@ class MediaFormat {
       return '${height}p';
     }
 
-    if (resolution != null) {
+    if (resolution != null &&
+        resolution!.isNotEmpty) {
       return resolution!;
     }
 
-    if (formatNote != null) {
+    if (formatNote != null &&
+        formatNote!.isNotEmpty) {
       return formatNote!;
     }
 
-    return ext?.toUpperCase() ?? 'Unknown';
+    return ext?.toUpperCase() ?? 'UNKNOWN';
   }
 
   String get sizeLabel {
-    if (filesize == null) {
+    if (filesize == null ||
+        filesize! <= 0) {
       return '';
     }
 
@@ -239,5 +245,46 @@ class MediaFormat {
     }
 
     return '${mb.toStringAsFixed(1)} MB';
+  }
+
+  String get description {
+    final parts = <String>[];
+
+    if (qualityLabel.isNotEmpty) {
+      parts.add(qualityLabel);
+    }
+
+    if (ext != null &&
+        ext!.isNotEmpty) {
+      parts.add(
+        ext!.toUpperCase(),
+      );
+    }
+
+    if (progressive) {
+      parts.add('Video + Audio');
+    } else if (hasVideo) {
+      parts.add('Video');
+    } else if (hasAudio) {
+      parts.add('Audio');
+    }
+
+    return parts.join(' • ');
+  }
+
+  String get displayName {
+    if (progressive) {
+      return '$qualityLabel • Video + Audio';
+    }
+
+    if (hasVideo) {
+      return '$qualityLabel • Video';
+    }
+
+    if (hasAudio) {
+      return '$qualityLabel • Audio';
+    }
+
+    return qualityLabel;
   }
 }

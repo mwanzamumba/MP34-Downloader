@@ -1,18 +1,23 @@
 import 'dart:convert';
+
 import 'package:http/http.dart' as http;
 
 import '../models/analyser.dart';
 
 class MediaApi {
-  // Replace this with your actual Render URL.
   static const String baseUrl =
-      'https://mp34-downloader-api.onrender.com';
+      'https://mp34-downloader.onrender.com';
+
+  // ============================================================
+  // ANALYSE MEDIA
+  // ============================================================
 
   Future<MediaInfo> analyse(String url) async {
     final response = await http.post(
       Uri.parse('$baseUrl/analyze'),
       headers: {
         'Content-Type': 'application/json',
+        'Accept': 'application/json',
       },
       body: jsonEncode({
         'url': url,
@@ -25,20 +30,17 @@ class MediaApi {
       return MediaInfo.fromJson(data);
     }
 
-    try {
-      final error = jsonDecode(response.body);
-
-      throw Exception(
-        error['detail'] ??
-            'Unable to analyse this media link.',
-      );
-    } catch (_) {
-      throw Exception(
-        'Unable to analyse this media link. '
-        'Server returned ${response.statusCode}.',
-      );
-    }
+    throw Exception(
+      _getErrorMessage(
+        response,
+        'Unable to analyze this media link.',
+      ),
+    );
   }
+
+  // ============================================================
+  // DOWNLOAD
+  // ============================================================
 
   Future<DownloadResult> download({
     required String url,
@@ -50,6 +52,7 @@ class MediaApi {
       Uri.parse('$baseUrl/download'),
       headers: {
         'Content-Type': 'application/json',
+        'Accept': 'application/json',
       },
       body: jsonEncode({
         'url': url,
@@ -68,22 +71,66 @@ class MediaApi {
       );
     }
 
-    try {
-      final error = jsonDecode(response.body);
+    throw Exception(
+      _getErrorMessage(
+        response,
+        'Download failed.',
+      ),
+    );
+  }
 
-      throw Exception(
-        error['detail'] ??
-            'Download failed.',
-      );
-    } catch (_) {
-      throw Exception(
-        'Download failed. '
-        'Server returned ${response.statusCode}.',
-      );
+  // ============================================================
+  // SERVER VERSION
+  // ============================================================
+
+  Future<Map<String, dynamic>> getVersion() async {
+    final response = await http.get(
+      Uri.parse('$baseUrl/version'),
+      headers: {
+        'Accept': 'application/json',
+      },
+    );
+
+    if (response.statusCode == 200) {
+      return jsonDecode(response.body)
+          as Map<String, dynamic>;
     }
+
+    throw Exception(
+      _getErrorMessage(
+        response,
+        'Unable to connect to the media server.',
+      ),
+    );
+  }
+
+  // ============================================================
+  // ERROR HANDLING
+  // ============================================================
+
+  String _getErrorMessage(
+    http.Response response,
+    String fallback,
+  ) {
+    try {
+      final data = jsonDecode(response.body);
+
+      if (data is Map &&
+          data['detail'] != null) {
+        return data['detail'].toString();
+      }
+    } catch (_) {
+      // Ignore invalid JSON.
+    }
+
+    return '$fallback Server returned ${response.statusCode}.';
   }
 }
 
+
+// ============================================================
+// DOWNLOAD RESULT
+// ============================================================
 
 class DownloadResult {
   final bool success;
@@ -111,24 +158,44 @@ class DownloadResult {
     String baseUrl,
   ) {
     final relativeUrl =
-        json['download_url'] as String? ?? '';
+        json['download_url']?.toString() ?? '';
+
+    final fullUrl =
+        relativeUrl.startsWith('http')
+            ? relativeUrl
+            : '$baseUrl$relativeUrl';
 
     return DownloadResult(
       success: json['success'] == true,
       platform:
-          json['platform'] as String? ?? '',
+          json['platform']?.toString() ?? '',
       title:
-          json['title'] as String? ?? '',
+          json['title']?.toString() ?? '',
       mediaType:
-          json['media_type'] as String? ?? '',
+          json['media_type']?.toString() ?? '',
       formatId:
-          json['format_id'] as String? ?? '',
+          json['format_id']?.toString() ?? '',
       filename:
-          json['filename'] as String? ?? '',
+          json['filename']?.toString() ?? '',
       size:
           (json['size'] as num?)?.toInt() ?? 0,
-      downloadUrl:
-          '$baseUrl$relativeUrl',
+      downloadUrl: fullUrl,
     );
+  }
+
+  double get sizeInMB {
+    return size / (1024 * 1024);
+  }
+
+  String get sizeLabel {
+    if (size <= 0) {
+      return 'Unknown size';
+    }
+
+    if (size >= 1024 * 1024 * 1024) {
+      return '${(size / (1024 * 1024 * 1024)).toStringAsFixed(2)} GB';
+    }
+
+    return '${sizeInMB.toStringAsFixed(1)} MB';
   }
 }
