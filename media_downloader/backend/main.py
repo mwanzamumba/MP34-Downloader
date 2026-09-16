@@ -3,6 +3,9 @@ from urllib.parse import urlparse
 import httpx
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from cookies_unlock import install_cookie_unlock
+
+install_cookie_unlock()
 
 try:
     import yt_dlp
