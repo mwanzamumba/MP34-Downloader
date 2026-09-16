@@ -15,9 +15,13 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, HttpUrl
 
 
+# ============================================================
+# APP
+# ============================================================
+
 app = FastAPI(
     title="Media Downloader API",
-    version="2.4.0",
+    version="2.5.0",
     description="Media analysis and downloading API powered by yt-dlp.",
 )
 
@@ -36,19 +40,28 @@ app.add_middleware(
 
 
 # ============================================================
-# DIRECTORIES / SETTINGS
+# SETTINGS
 # ============================================================
 
 BASE_DIR = Path(__file__).resolve().parent
 
 DOWNLOAD_DIR = BASE_DIR / "downloads"
-DOWNLOAD_DIR.mkdir(parents=True, exist_ok=True)
+DOWNLOAD_DIR.mkdir(
+    parents=True,
+    exist_ok=True,
+)
 
-FILE_TTL = int(os.getenv("FILE_TTL", "1800"))
+FILE_TTL = int(
+    os.getenv(
+        "FILE_TTL",
+        "1800",
+    )
+)
 
-# Cookie remains configured in Render, but this version
-# deliberately does NOT use it for YouTube extraction.
-YOUTUBE_COOKIES = os.getenv("YOUTUBE_COOKIES", "").strip()
+YOUTUBE_COOKIES = os.getenv(
+    "YOUTUBE_COOKIES",
+    "",
+).strip()
 
 
 # ============================================================
@@ -78,21 +91,25 @@ SUPPORTED_PLATFORMS = {
         "youtu.be",
         "www.youtu.be",
     ],
+
     "facebook": [
         "facebook.com",
         "www.facebook.com",
         "m.facebook.com",
         "fb.watch",
     ],
+
     "instagram": [
         "instagram.com",
         "www.instagram.com",
     ],
+
     "tiktok": [
         "tiktok.com",
         "www.tiktok.com",
         "vm.tiktok.com",
     ],
+
     "x": [
         "twitter.com",
         "www.twitter.com",
@@ -103,23 +120,40 @@ SUPPORTED_PLATFORMS = {
 
 
 # ============================================================
-# PLATFORM DETECTION
+# PLATFORM
 # ============================================================
 
 def detect_platform(url: str) -> str:
+
     parsed = urlparse(url)
 
-    host = parsed.netloc.lower().split(":")[0]
+    host = (
+        parsed.netloc
+        .lower()
+        .split(":")[0]
+    )
 
-    for platform, domains in SUPPORTED_PLATFORMS.items():
+    for platform, domains in (
+        SUPPORTED_PLATFORMS.items()
+    ):
+
         for domain in domains:
-            if host == domain or host.endswith("." + domain):
+
+            if (
+                host == domain
+                or host.endswith(
+                    "." + domain
+                )
+            ):
                 return platform
 
     return "unknown"
 
 
-def platform_display_name(platform: str) -> str:
+def platform_display_name(
+    platform: str,
+) -> str:
+
     names = {
         "youtube": "YouTube",
         "facebook": "Facebook",
@@ -129,13 +163,18 @@ def platform_display_name(platform: str) -> str:
         "unknown": "Unknown",
     }
 
-    return names.get(platform, platform.title())
+    return names.get(
+        platform,
+        platform.title(),
+    )
 
 
 def validate_url(url: str):
+
     platform = detect_platform(url)
 
     if platform == "unknown":
+
         raise HTTPException(
             status_code=400,
             detail=(
@@ -149,18 +188,10 @@ def validate_url(url: str):
 
 
 # ============================================================
-# COOKIE FUNCTIONS
+# COOKIE FILE
 # ============================================================
 
 def create_cookie_file() -> Optional[str]:
-    """
-    Creates a temporary cookie file.
-
-    NOTE:
-    This function is kept for future use, but the current
-    diagnostic version deliberately does NOT use cookies
-    for YouTube extraction.
-    """
 
     if not YOUTUBE_COOKIES:
         return None
@@ -173,7 +204,11 @@ def create_cookie_file() -> Optional[str]:
     )
 
     try:
-        temp_file.write(YOUTUBE_COOKIES)
+
+        temp_file.write(
+            YOUTUBE_COOKIES
+        )
+
         temp_file.flush()
         temp_file.close()
 
@@ -187,20 +222,30 @@ def create_cookie_file() -> Optional[str]:
             pass
 
         try:
-            os.unlink(temp_file.name)
+            os.unlink(
+                temp_file.name
+            )
         except Exception:
             pass
 
         raise
 
 
-def remove_cookie_file(cookie_file: Optional[str]):
+def remove_cookie_file(
+    cookie_file: Optional[str],
+):
+
     if not cookie_file:
         return
 
     try:
-        os.unlink(cookie_file)
+
+        os.unlink(
+            cookie_file
+        )
+
     except Exception:
+
         pass
 
 
@@ -208,20 +253,34 @@ def remove_cookie_file(cookie_file: Optional[str]):
 # SYSTEM CHECKS
 # ============================================================
 
-def executable_available(name: str) -> bool:
-    return shutil.which(name) is not None
+def executable_available(
+    name: str,
+) -> bool:
+
+    return shutil.which(
+        name
+    ) is not None
 
 
 def ffmpeg_available() -> bool:
-    return executable_available("ffmpeg")
+
+    return executable_available(
+        "ffmpeg"
+    )
 
 
 def ffprobe_available() -> bool:
-    return executable_available("ffprobe")
+
+    return executable_available(
+        "ffprobe"
+    )
 
 
 def node_available() -> bool:
-    return executable_available("node")
+
+    return executable_available(
+        "node"
+    )
 
 
 # ============================================================
@@ -232,13 +291,15 @@ def get_ytdlp_options(
     skip_download: bool = True,
     cookie_file: Optional[str] = None,
 ):
+
     options = {
+
         "quiet": True,
+
         "no_warnings": False,
 
-        # VERY IMPORTANT
-        # Prevent yt-dlp from loading external config files
-        # that may force a format.
+        # Prevent external yt-dlp config
+        # from selecting a format.
         "ignoreconfig": True,
 
         "noplaylist": True,
@@ -249,7 +310,7 @@ def get_ytdlp_options(
 
         "fragment_retries": 3,
 
-        # Use Node for YouTube JS challenge solving.
+        # Node JS challenge solving
         "js_runtimes": {
             "node": {}
         },
@@ -257,8 +318,28 @@ def get_ytdlp_options(
         "skip_download": skip_download,
     }
 
+    # --------------------------------------------------------
+    # YouTube-specific extractor settings
+    # --------------------------------------------------------
+
+    options[
+        "extractor_args"
+    ] = {
+
+        "youtube": {
+
+            "player_client": [
+                "web",
+                "android",
+            ],
+        }
+    }
+
     if cookie_file:
-        options["cookiefile"] = cookie_file
+
+        options[
+            "cookiefile"
+        ] = cookie_file
 
     return options
 
@@ -267,8 +348,13 @@ def get_ytdlp_options(
 # FORMAT HELPERS
 # ============================================================
 
-def has_video(fmt: dict) -> bool:
-    codec = fmt.get("vcodec")
+def has_video(
+    fmt: dict,
+) -> bool:
+
+    codec = fmt.get(
+        "vcodec"
+    )
 
     return (
         codec is not None
@@ -276,8 +362,13 @@ def has_video(fmt: dict) -> bool:
     )
 
 
-def has_audio(fmt: dict) -> bool:
-    codec = fmt.get("acodec")
+def has_audio(
+    fmt: dict,
+) -> bool:
+
+    codec = fmt.get(
+        "acodec"
+    )
 
     return (
         codec is not None
@@ -285,27 +376,42 @@ def has_audio(fmt: dict) -> bool:
     )
 
 
-def is_progressive(fmt: dict) -> bool:
+def is_progressive(
+    fmt: dict,
+) -> bool:
+
     return (
         has_video(fmt)
         and has_audio(fmt)
     )
 
 
-def is_storyboard(fmt: dict) -> bool:
+def is_storyboard(
+    fmt: dict,
+) -> bool:
+
     return str(
-        fmt.get("format_id", "")
+        fmt.get(
+            "format_id",
+            "",
+        )
     ).startswith("sb")
 
 
-def is_audio_only(fmt: dict) -> bool:
+def is_audio_only(
+    fmt: dict,
+) -> bool:
+
     return (
         has_audio(fmt)
         and not has_video(fmt)
     )
 
 
-def is_video_only(fmt: dict) -> bool:
+def is_video_only(
+    fmt: dict,
+) -> bool:
+
     return (
         has_video(fmt)
         and not has_audio(fmt)
@@ -313,28 +419,44 @@ def is_video_only(fmt: dict) -> bool:
 
 
 def numeric(value):
+
     try:
-        return float(value or 0)
+
+        return float(
+            value or 0
+        )
+
     except Exception:
+
         return 0.0
 
 
-def get_filesize(fmt: dict):
+def get_filesize(
+    fmt: dict,
+):
 
-    size = fmt.get("filesize")
+    size = fmt.get(
+        "filesize"
+    )
 
     if size:
+
         return int(size)
 
-    approx = fmt.get("filesize_approx")
+    approx = fmt.get(
+        "filesize_approx"
+    )
 
     if approx:
+
         return int(approx)
 
     return None
 
 
-def quality_score(fmt: dict):
+def quality_score(
+    fmt: dict,
+):
 
     height = numeric(
         fmt.get("height")
@@ -361,7 +483,7 @@ def quality_score(fmt: dict):
 
 
 # ============================================================
-# PUBLIC FORMAT REPRESENTATION
+# PUBLIC FORMAT
 # ============================================================
 
 def format_to_public(
@@ -369,43 +491,72 @@ def format_to_public(
     format_type: str,
 ):
 
-    video = has_video(fmt)
-    audio = has_audio(fmt)
+    video = has_video(
+        fmt
+    )
+
+    audio = has_audio(
+        fmt
+    )
 
     return {
+
         "format_id": str(
-            fmt.get("format_id", "")
+            fmt.get(
+                "format_id",
+                "",
+            )
         ),
 
         "type": format_type,
 
-        "ext": fmt.get("ext"),
+        "ext": fmt.get(
+            "ext"
+        ),
 
         "format_note": fmt.get(
             "format_note"
         ),
 
-        "width": fmt.get("width"),
+        "width": fmt.get(
+            "width"
+        ),
 
-        "height": fmt.get("height"),
+        "height": fmt.get(
+            "height"
+        ),
 
         "resolution": fmt.get(
             "resolution"
         ),
 
-        "fps": fmt.get("fps"),
+        "fps": fmt.get(
+            "fps"
+        ),
 
-        "vcodec": fmt.get("vcodec"),
+        "vcodec": fmt.get(
+            "vcodec"
+        ),
 
-        "acodec": fmt.get("acodec"),
+        "acodec": fmt.get(
+            "acodec"
+        ),
 
-        "abr": fmt.get("abr"),
+        "abr": fmt.get(
+            "abr"
+        ),
 
-        "vbr": fmt.get("vbr"),
+        "vbr": fmt.get(
+            "vbr"
+        ),
 
-        "tbr": fmt.get("tbr"),
+        "tbr": fmt.get(
+            "tbr"
+        ),
 
-        "filesize": get_filesize(fmt),
+        "filesize": get_filesize(
+            fmt
+        ),
 
         "has_video": video,
 
@@ -418,16 +569,19 @@ def format_to_public(
 
 
 # ============================================================
-# ERROR CLEANING
+# ERROR
 # ============================================================
 
 def clean_yt_error(
     error: Exception,
 ) -> str:
 
-    message = str(error)
+    message = str(
+        error
+    )
 
     if not message:
+
         return (
             "yt-dlp failed without "
             "returning an error message."
@@ -437,37 +591,37 @@ def clean_yt_error(
 
 
 # ============================================================
-# EXTRACT INFORMATION
+# EXTRACT INFO
 # ============================================================
 
-def extract_info(url: str):
-
-    """
-    Extract media information.
-
-    IMPORTANT:
-    The diagnostic version deliberately does NOT use
-    YOUTUBE_COOKIES.
-
-    This allows us to determine whether the cookies are
-    causing YouTube to return unusable formats.
-    """
+def extract_info(
+    url: str,
+):
 
     cookie_file = None
 
     try:
 
-        platform = detect_platform(url)
+        platform = detect_platform(
+            url
+        )
 
         # ----------------------------------------------------
-        # DIAGNOSTIC CHANGE
-        #
-        # Do NOT create/use the YouTube cookie file.
+        # YouTube cookies
         # ----------------------------------------------------
+
+        if (
+            platform == "youtube"
+            and YOUTUBE_COOKIES
+        ):
+
+            cookie_file = (
+                create_cookie_file()
+            )
 
         options = get_ytdlp_options(
             skip_download=True,
-            cookie_file=None,
+            cookie_file=cookie_file,
         )
 
         print(
@@ -475,8 +629,13 @@ def extract_info(url: str):
         )
 
         print(
-            "[EXTRACT] YouTube cookies: DISABLED "
-            "for diagnostic test"
+            f"[EXTRACT] Cookies: "
+            f"{bool(cookie_file)}"
+        )
+
+        print(
+            f"[EXTRACT] Node: "
+            f"{node_available()}"
         )
 
         print(
@@ -502,7 +661,7 @@ def extract_info(url: str):
 
 
 # ============================================================
-# CHOOSE VIDEO FORMAT
+# VIDEO FORMAT
 # ============================================================
 
 def choose_video_format(
@@ -510,42 +669,53 @@ def choose_video_format(
     requested_id: Optional[str] = None,
 ):
 
-    formats = info.get("formats") or []
+    formats = (
+        info.get("formats")
+        or []
+    )
 
     usable = [
+
         fmt
+
         for fmt in formats
+
         if (
             not is_storyboard(fmt)
             and has_video(fmt)
         )
+
     ]
 
-    # --------------------------------------------------------
     # Requested format
-    # --------------------------------------------------------
-
     if requested_id:
 
         for fmt in usable:
 
-            if str(
-                fmt.get("format_id")
-            ) == str(requested_id):
+            if (
+                str(
+                    fmt.get(
+                        "format_id"
+                    )
+                )
+                == str(requested_id)
+            ):
 
                 return fmt
 
-    # --------------------------------------------------------
-    # Prefer MP4 progressive
-    # --------------------------------------------------------
-
+    # Progressive MP4
     progressive_mp4 = [
+
         fmt
+
         for fmt in usable
+
         if (
             is_progressive(fmt)
-            and fmt.get("ext") == "mp4"
+            and fmt.get("ext")
+            == "mp4"
         )
+
     ]
 
     if progressive_mp4:
@@ -555,14 +725,15 @@ def choose_video_format(
             key=quality_score,
         )
 
-    # --------------------------------------------------------
-    # Any progressive format
-    # --------------------------------------------------------
-
+    # Any progressive
     progressive = [
+
         fmt
+
         for fmt in usable
+
         if is_progressive(fmt)
+
     ]
 
     if progressive:
@@ -572,14 +743,15 @@ def choose_video_format(
             key=quality_score,
         )
 
-    # --------------------------------------------------------
-    # Video-only
-    # --------------------------------------------------------
-
+    # Video only
     video_only = [
+
         fmt
+
         for fmt in usable
+
         if is_video_only(fmt)
+
     ]
 
     if video_only:
@@ -593,7 +765,7 @@ def choose_video_format(
 
 
 # ============================================================
-# CHOOSE AUDIO FORMAT
+# AUDIO FORMAT
 # ============================================================
 
 def choose_audio_format(
@@ -601,76 +773,86 @@ def choose_audio_format(
     requested_id: Optional[str] = None,
 ):
 
-    formats = info.get("formats") or []
+    formats = (
+        info.get("formats")
+        or []
+    )
 
     audio_formats = [
+
         fmt
+
         for fmt in formats
+
         if (
             not is_storyboard(fmt)
             and is_audio_only(fmt)
         )
+
     ]
 
-    # --------------------------------------------------------
-    # Requested format
-    # --------------------------------------------------------
-
+    # Requested
     if requested_id:
 
         for fmt in formats:
 
-            if str(
-                fmt.get("format_id")
-            ) == str(requested_id):
+            if (
+                str(
+                    fmt.get(
+                        "format_id"
+                    )
+                )
+                == str(requested_id)
+                and has_audio(fmt)
+            ):
 
-                if has_audio(fmt):
+                return fmt
 
-                    return fmt
-
-    # --------------------------------------------------------
-    # Prefer M4A
-    # --------------------------------------------------------
-
+    # M4A
     m4a_formats = [
+
         fmt
+
         for fmt in audio_formats
-        if fmt.get("ext") == "m4a"
+
+        if fmt.get("ext")
+        == "m4a"
+
     ]
 
     if m4a_formats:
 
         return max(
             m4a_formats,
-            key=lambda x: numeric(
+            key=lambda x:
+            numeric(
                 x.get("abr")
             ),
         )
 
-    # --------------------------------------------------------
-    # Any audio-only
-    # --------------------------------------------------------
-
+    # Any audio
     if audio_formats:
 
         return max(
             audio_formats,
-            key=lambda x: numeric(
+            key=lambda x:
+            numeric(
                 x.get("abr")
             ),
         )
 
-    # --------------------------------------------------------
-    # Fall back to progressive
-    # --------------------------------------------------------
-
+    # Progressive fallback
     progressive = [
+
         fmt
+
         for fmt in formats
+
         if (
             not is_storyboard(fmt)
             and is_progressive(fmt)
         )
+
     ]
 
     if progressive:
@@ -684,12 +866,17 @@ def choose_audio_format(
 
 
 # ============================================================
-# BUILD ANALYSIS RESPONSE
+# ANALYSIS
 # ============================================================
 
-def build_analysis(info: dict):
+def build_analysis(
+    info: dict,
+):
 
-    formats = info.get("formats") or []
+    formats = (
+        info.get("formats")
+        or []
+    )
 
     video_formats = []
 
@@ -700,13 +887,17 @@ def build_analysis(info: dict):
     for fmt in formats:
 
         if is_storyboard(fmt):
+
             continue
 
-        video = has_video(fmt)
+        video = has_video(
+            fmt
+        )
 
-        audio = has_audio(fmt)
+        audio = has_audio(
+            fmt
+        )
 
-        # Video
         if video:
 
             video_formats.append(
@@ -716,7 +907,6 @@ def build_analysis(info: dict):
                 )
             )
 
-        # Audio only
         if audio and not video:
 
             audio_formats.append(
@@ -726,7 +916,6 @@ def build_analysis(info: dict):
                 )
             )
 
-        # Video + Audio
         if video and audio:
 
             progressive_formats.append(
@@ -735,10 +924,6 @@ def build_analysis(info: dict):
                     "progressive",
                 )
             )
-
-    # --------------------------------------------------------
-    # Sort formats
-    # --------------------------------------------------------
 
     video_formats.sort(
         key=lambda x: (
@@ -763,26 +948,30 @@ def build_analysis(info: dict):
         reverse=True,
     )
 
-    recommended_video = choose_video_format(
-        info
+    recommended_video = (
+        choose_video_format(info)
     )
 
-    recommended_audio = choose_audio_format(
-        info
+    recommended_audio = (
+        choose_audio_format(info)
     )
 
     return {
+
         "success": True,
 
-        "title": info.get(
-            "title"
-        ) or "Unknown title",
+        "title": (
+            info.get("title")
+            or "Unknown title"
+        ),
 
-        "platform": platform_display_name(
-            detect_platform(
-                info.get(
-                    "webpage_url",
-                    "",
+        "platform": (
+            platform_display_name(
+                detect_platform(
+                    info.get(
+                        "webpage_url",
+                        "",
+                    )
                 )
             )
         ),
@@ -804,51 +993,61 @@ def build_analysis(info: dict):
         ),
 
         "has_video": (
-            len(video_formats) > 0
+            len(video_formats)
+            > 0
         ),
 
         "has_audio": (
-            len(audio_formats) > 0
-            or len(progressive_formats) > 0
+            len(audio_formats)
+            > 0
+            or len(
+                progressive_formats
+            )
+            > 0
         ),
 
         "recommended_video": (
+
             format_to_public(
                 recommended_video,
                 "video",
             )
+
             if recommended_video
+
             else None
         ),
 
         "recommended_audio": (
+
             format_to_public(
                 recommended_audio,
                 "audio",
             )
+
             if recommended_audio
+
             else None
         ),
 
-        "video_formats": (
-            video_formats
-        ),
+        "video_formats":
+            video_formats,
 
-        "audio_formats": (
-            audio_formats
-        ),
+        "audio_formats":
+            audio_formats,
 
-        "progressive_formats": (
-            progressive_formats
-        ),
+        "progressive_formats":
+            progressive_formats,
     }
 
 
 # ============================================================
-# SAFE FILE NAME
+# FILE NAME
 # ============================================================
 
-def safe_filename(name: str) -> str:
+def safe_filename(
+    name: str,
+) -> str:
 
     name = re.sub(
         r'[<>:"/\\|?*\x00-\x1F]',
@@ -866,12 +1065,13 @@ def safe_filename(name: str) -> str:
 
 
 # ============================================================
-# CLEAN OLD DOWNLOADS
+# CLEAN DOWNLOADS
 # ============================================================
 
 def cleanup_old_downloads():
 
     if not DOWNLOAD_DIR.exists():
+
         return
 
     current_time = os.path.getmtime(
@@ -909,22 +1109,27 @@ def cleanup_old_downloads():
 def root():
 
     return {
-        "name": "Media Downloader API",
 
-        "version": "2.4.0",
+        "name":
+            "Media Downloader API",
 
-        "status": "online",
+        "version":
+            "2.5.0",
 
-        "youtube_cookie_test": (
-            "disabled"
-        ),
+        "status":
+            "online",
+
+        "youtube_cookies":
+            "enabled",
 
         "supported_platforms": [
+
             "YouTube",
             "Facebook",
             "Instagram",
             "TikTok",
             "X",
+
         ],
     }
 
@@ -948,31 +1153,38 @@ def version():
 
     return {
 
-        "api_version": "2.4.0",
+        "api_version":
+            "2.5.0",
 
-        "yt_dlp": yt_dlp_version,
+        "yt_dlp":
+            yt_dlp_version,
 
-        "node_available": (
-            node_available()
-        ),
+        "node_available":
+            node_available(),
 
-        "ffmpeg_available": (
-            ffmpeg_available()
-        ),
+        "ffmpeg_available":
+            ffmpeg_available(),
 
-        "ffprobe_available": (
-            ffprobe_available()
-        ),
+        "ffprobe_available":
+            ffprobe_available(),
 
-        "cookies_configured": (
-            bool(YOUTUBE_COOKIES)
-        ),
+        "cookies_configured":
+            bool(
+                YOUTUBE_COOKIES
+            ),
 
-        "cookies_length": (
-            len(YOUTUBE_COOKIES)
-        ),
+        "cookies_length":
+            len(
+                YOUTUBE_COOKIES
+            ),
 
-        "youtube_cookies_used": False,
+        "youtube_cookies_used":
+            True,
+
+        "youtube_player_clients": [
+            "web",
+            "android",
+        ],
     }
 
 
@@ -1003,93 +1215,109 @@ def debug_youtube():
         for fmt in formats:
 
             if is_storyboard(fmt):
+
                 continue
 
-            if has_video(fmt) or has_audio(fmt):
+            if not (
+                has_video(fmt)
+                or has_audio(fmt)
+            ):
 
-                usable_formats.append(
-                    format_to_public(
-                        fmt,
-                        (
-                            "progressive"
-                            if is_progressive(fmt)
-                            else
-                            "video"
-                            if has_video(fmt)
-                            else
-                            "audio"
-                        ),
-                    )
+                continue
+
+            if is_progressive(fmt):
+
+                format_type = (
+                    "progressive"
                 )
+
+            elif has_video(fmt):
+
+                format_type = (
+                    "video"
+                )
+
+            else:
+
+                format_type = (
+                    "audio"
+                )
+
+            usable_formats.append(
+                format_to_public(
+                    fmt,
+                    format_type,
+                )
+            )
 
         return {
 
-            "success": True,
+            "success":
+                True,
 
-            "title": info.get(
-                "title"
-            ),
+            "title":
+                info.get("title"),
 
-            "platform": detect_platform(
-                test_url
-            ),
+            "platform":
+                "YouTube",
 
-            "cookies_configured": (
-                bool(YOUTUBE_COOKIES)
-            ),
+            "cookies_configured":
+                bool(
+                    YOUTUBE_COOKIES
+                ),
 
-            "youtube_cookies_used": False,
+            "youtube_cookies_used":
+                True,
 
-            "node_available": (
-                node_available()
-            ),
+            "node_available":
+                node_available(),
 
-            "ffmpeg_available": (
-                ffmpeg_available()
-            ),
+            "ffmpeg_available":
+                ffmpeg_available(),
 
-            "ffprobe_available": (
-                ffprobe_available()
-            ),
+            "ffprobe_available":
+                ffprobe_available(),
 
-            "format_count": len(
-                formats
-            ),
+            "format_count":
+                len(formats),
 
-            "usable_format_count": len(
-                usable_formats
-            ),
+            "usable_format_count":
+                len(
+                    usable_formats
+                ),
 
-            "formats": usable_formats,
+            "formats":
+                usable_formats,
         }
 
     except Exception as error:
 
         return {
 
-            "success": False,
+            "success":
+                False,
 
-            "error": clean_yt_error(
-                error
-            ),
+            "error":
+                clean_yt_error(
+                    error
+                ),
 
-            "cookies_configured": (
-                bool(YOUTUBE_COOKIES)
-            ),
+            "cookies_configured":
+                bool(
+                    YOUTUBE_COOKIES
+                ),
 
-            "youtube_cookies_used": False,
+            "youtube_cookies_used":
+                True,
 
-            "node_available": (
-                node_available()
-            ),
+            "node_available":
+                node_available(),
 
-            "ffmpeg_available": (
-                ffmpeg_available()
-            ),
+            "ffmpeg_available":
+                ffmpeg_available(),
 
-            "ffprobe_available": (
-                ffprobe_available()
-            ),
+            "ffprobe_available":
+                ffprobe_available(),
         }
 
 
@@ -1099,12 +1327,16 @@ def debug_youtube():
 
 @app.post("/debug-formats")
 def debug_formats(
-    request: AnalyzeRequest
+    request: AnalyzeRequest,
 ):
 
-    url = str(request.url)
+    url = str(
+        request.url
+    )
 
-    validate_url(url)
+    validate_url(
+        url
+    )
 
     try:
 
@@ -1120,6 +1352,7 @@ def debug_formats(
         ):
 
             if is_storyboard(fmt):
+
                 continue
 
             if is_progressive(fmt):
@@ -1130,11 +1363,15 @@ def debug_formats(
 
             elif has_video(fmt):
 
-                format_type = "video"
+                format_type = (
+                    "video"
+                )
 
             elif has_audio(fmt):
 
-                format_type = "audio"
+                format_type = (
+                    "audio"
+                )
 
             else:
 
@@ -1149,21 +1386,24 @@ def debug_formats(
 
         return {
 
-            "success": True,
+            "success":
+                True,
 
-            "title": info.get(
-                "title"
-            ),
+            "title":
+                info.get("title"),
 
-            "platform": platform_display_name(
-                detect_platform(url)
-            ),
+            "platform":
+                platform_display_name(
+                    detect_platform(
+                        url
+                    )
+                ),
 
-            "format_count": len(
-                formats
-            ),
+            "format_count":
+                len(formats),
 
-            "formats": formats,
+            "formats":
+                formats,
         }
 
     except Exception as error:
@@ -1182,12 +1422,16 @@ def debug_formats(
 
 @app.post("/analyze")
 def analyze(
-    request: AnalyzeRequest
+    request: AnalyzeRequest,
 ):
 
-    url = str(request.url)
+    url = str(
+        request.url
+    )
 
-    validate_url(url)
+    validate_url(
+        url
+    )
 
     try:
 
@@ -1215,12 +1459,16 @@ def analyze(
 
 @app.post("/validate-streams")
 def validate_streams(
-    request: AnalyzeRequest
+    request: AnalyzeRequest,
 ):
 
-    url = str(request.url)
+    url = str(
+        request.url
+    )
 
-    validate_url(url)
+    validate_url(
+        url
+    )
 
     try:
 
@@ -1228,49 +1476,58 @@ def validate_streams(
             url
         )
 
-        video = choose_video_format(
-            info
+        video = (
+            choose_video_format(
+                info
+            )
         )
 
-        audio = choose_audio_format(
-            info
+        audio = (
+            choose_audio_format(
+                info
+            )
         )
 
         return {
 
-            "success": True,
+            "success":
+                True,
 
-            "title": info.get(
-                "title"
-            ),
+            "title":
+                info.get("title"),
 
             "video": (
+
                 format_to_public(
                     video,
                     "video",
                 )
+
                 if video
+
                 else None
             ),
 
             "audio": (
+
                 format_to_public(
                     audio,
                     "audio",
                 )
+
                 if audio
+
                 else None
             ),
 
-            "ffmpeg_available": (
-                ffmpeg_available()
-            ),
+            "ffmpeg_available":
+                ffmpeg_available(),
 
-            "node_available": (
-                node_available()
-            ),
+            "node_available":
+                node_available(),
 
-            "youtube_cookies_used": False,
+            "youtube_cookies_used":
+                True,
         }
 
     except Exception as error:
@@ -1289,10 +1546,12 @@ def validate_streams(
 
 @app.post("/download")
 def download(
-    request: DownloadRequest
+    request: DownloadRequest,
 ):
 
-    url = str(request.url)
+    url = str(
+        request.url
+    )
 
     platform = validate_url(
         url
@@ -1314,10 +1573,6 @@ def download(
                 "'video' or 'audio'."
             ),
         )
-
-    # --------------------------------------------------------
-    # Audio requires FFmpeg
-    # --------------------------------------------------------
 
     if (
         media_type == "audio"
@@ -1347,18 +1602,26 @@ def download(
         exist_ok=True,
     )
 
-    # --------------------------------------------------------
-    # IMPORTANT:
-    # No YouTube cookies for this diagnostic
-    # --------------------------------------------------------
-
     cookie_file = None
 
     try:
 
+        # ----------------------------------------------------
+        # Get metadata first
+        # ----------------------------------------------------
+
+        if (
+            platform == "youtube"
+            and YOUTUBE_COOKIES
+        ):
+
+            cookie_file = (
+                create_cookie_file()
+            )
+
         info_options = get_ytdlp_options(
             skip_download=True,
-            cookie_file=None,
+            cookie_file=cookie_file,
         )
 
         with yt_dlp.YoutubeDL(
@@ -1381,9 +1644,11 @@ def download(
 
         if media_type == "video":
 
-            selected = choose_video_format(
-                info,
-                request.format_id,
+            selected = (
+                choose_video_format(
+                    info,
+                    request.format_id,
+                )
             )
 
             if not selected:
@@ -1396,30 +1661,25 @@ def download(
                     ),
                 )
 
-            selected_id = selected.get(
-                "format_id"
+            selected_id = (
+                selected.get(
+                    "format_id"
+                )
             )
-
-            # ------------------------------------------------
-            # Progressive format
-            # ------------------------------------------------
 
             if is_progressive(
                 selected
             ):
 
-                format_selector = str(
-                    selected_id
+                format_selector = (
+                    str(selected_id)
                 )
-
-            # ------------------------------------------------
-            # Video-only format
-            # ------------------------------------------------
 
             else:
 
                 format_selector = (
-                    f"{selected_id}+bestaudio/best"
+                    f"{selected_id}"
+                    "+bestaudio/best"
                 )
 
             output_template = str(
@@ -1429,32 +1689,58 @@ def download(
 
             download_options = {
 
-                "quiet": False,
+                "quiet":
+                    False,
 
-                "no_warnings": False,
+                "no_warnings":
+                    False,
 
-                "ignoreconfig": True,
+                "ignoreconfig":
+                    True,
 
-                "noplaylist": True,
+                "noplaylist":
+                    True,
 
-                "socket_timeout": 60,
+                "socket_timeout":
+                    60,
 
-                "retries": 5,
+                "retries":
+                    5,
 
-                "fragment_retries": 5,
+                "fragment_retries":
+                    5,
 
                 "js_runtimes": {
                     "node": {}
                 },
 
-                "format": format_selector,
+                "extractor_args": {
+                    "youtube": {
+                        "player_client": [
+                            "web",
+                            "android",
+                        ],
+                    }
+                },
 
-                "outtmpl": output_template,
+                "format":
+                    format_selector,
 
-                "merge_output_format": "mp4",
+                "outtmpl":
+                    output_template,
 
-                "skip_download": False,
+                "merge_output_format":
+                    "mp4",
+
+                "skip_download":
+                    False,
             }
+
+            if cookie_file:
+
+                download_options[
+                    "cookiefile"
+                ] = cookie_file
 
         # ====================================================
         # AUDIO
@@ -1462,9 +1748,11 @@ def download(
 
         else:
 
-            selected = choose_audio_format(
-                info,
-                request.format_id,
+            selected = (
+                choose_audio_format(
+                    info,
+                    request.format_id,
+                )
             )
 
             if not selected:
@@ -1477,8 +1765,10 @@ def download(
                     ),
                 )
 
-            selected_id = selected.get(
-                "format_id"
+            selected_id = (
+                selected.get(
+                    "format_id"
+                )
             )
 
             audio_format = (
@@ -1506,56 +1796,78 @@ def download(
 
             download_options = {
 
-                "quiet": False,
+                "quiet":
+                    False,
 
-                "no_warnings": False,
+                "no_warnings":
+                    False,
 
-                "ignoreconfig": True,
+                "ignoreconfig":
+                    True,
 
-                "noplaylist": True,
+                "noplaylist":
+                    True,
 
-                "socket_timeout": 60,
+                "socket_timeout":
+                    60,
 
-                "retries": 5,
+                "retries":
+                    5,
 
-                "fragment_retries": 5,
+                "fragment_retries":
+                    5,
 
                 "js_runtimes": {
                     "node": {}
                 },
 
-                "format": str(
-                    selected_id
-                ),
+                "extractor_args": {
+                    "youtube": {
+                        "player_client": [
+                            "web",
+                            "android",
+                        ],
+                    }
+                },
 
-                "outtmpl": output_template,
+                "format":
+                    str(selected_id),
 
-                "skip_download": False,
+                "outtmpl":
+                    output_template,
+
+                "skip_download":
+                    False,
 
                 "postprocessors": [
 
                     {
-                        "key": (
-                            "FFmpegExtractAudio"
-                        ),
+                        "key":
+                            "FFmpegExtractAudio",
 
-                        "preferredcodec": (
-                            audio_format
-                        ),
+                        "preferredcodec":
+                            audio_format,
 
-                        "preferredquality": (
-                            "192"
-                        ),
+                        "preferredquality":
+                            "192",
                     }
+
                 ],
             }
 
+            if cookie_file:
+
+                download_options[
+                    "cookiefile"
+                ] = cookie_file
+
         # ----------------------------------------------------
-        # DOWNLOAD LOGGING
+        # Logging
         # ----------------------------------------------------
 
         print(
-            f"[DOWNLOAD] Platform: {platform}"
+            f"[DOWNLOAD] Platform: "
+            f"{platform}"
         )
 
         print(
@@ -1573,12 +1885,12 @@ def download(
         )
 
         print(
-            "[DOWNLOAD] YouTube cookies: "
-            "DISABLED"
+            f"[DOWNLOAD] Cookies: "
+            f"{bool(cookie_file)}"
         )
 
         # ----------------------------------------------------
-        # Execute download
+        # Download
         # ----------------------------------------------------
 
         with yt_dlp.YoutubeDL(
@@ -1590,7 +1902,7 @@ def download(
             )
 
         # ----------------------------------------------------
-        # Find generated file
+        # Find output
         # ----------------------------------------------------
 
         files = [
@@ -1616,9 +1928,8 @@ def download(
 
         output_file = max(
             files,
-            key=lambda file: (
-                file.stat().st_mtime
-            ),
+            key=lambda file:
+            file.stat().st_mtime,
         )
 
         file_size = (
@@ -1627,36 +1938,41 @@ def download(
 
         return {
 
-            "success": True,
+            "success":
+                True,
 
-            "platform": platform_display_name(
-                platform
-            ),
+            "platform":
+                platform_display_name(
+                    platform
+                ),
 
-            "title": (
-                info.get("title")
-                or title
-            ),
+            "title":
+                info.get(
+                    "title"
+                )
+                or title,
 
-            "media_type": media_type,
+            "media_type":
+                media_type,
 
-            "format_id": str(
-                selected_id
-            ),
+            "format_id":
+                str(selected_id),
 
-            "filename": (
-                output_file.name
-            ),
+            "filename":
+                output_file.name,
 
-            "size": file_size,
+            "size":
+                file_size,
 
-            "download_url": (
-                f"/files/"
-                f"{job_id}/"
-                f"{output_file.name}"
-            ),
+            "download_url":
+                (
+                    f"/files/"
+                    f"{job_id}/"
+                    f"{output_file.name}"
+                ),
 
-            "youtube_cookies_used": False,
+            "youtube_cookies_used":
+                bool(cookie_file),
         }
 
     except HTTPException:
@@ -1666,7 +1982,8 @@ def download(
     except Exception as error:
 
         print(
-            f"[DOWNLOAD ERROR] {error}"
+            f"[DOWNLOAD ERROR] "
+            f"{error}"
         )
 
         raise HTTPException(
@@ -1686,7 +2003,7 @@ def download(
 
 
 # ============================================================
-# SERVE DOWNLOADED FILE
+# FILE SERVER
 # ============================================================
 
 @app.get(
