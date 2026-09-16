@@ -1,5 +1,5 @@
 fastapi
 uvicorn[standard]
 yt-dlp
-httpx
 yt-dlp-ejs
+httpx

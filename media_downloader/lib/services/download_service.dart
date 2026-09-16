@@ -10,7 +10,7 @@ import 'notification_service.dart';
 
 class DownloadService {
   static Future<void> download({
-    required MediaAnalysis media,
+    required dynamic media,
     required String format,
     required CancelToken cancelToken,
     required void Function(double progress, String status) onProgress,
@@ -114,7 +114,7 @@ class DownloadService {
   // ============================================================
 
   static Future<void> _downloadMp4({
-    required MediaAnalysis media,
+    required dynamic media,
     required String videoPath,
     required String audioPath,
     required String outputPath,
@@ -201,7 +201,7 @@ class DownloadService {
   // ============================================================
 
   static Future<void> _downloadMp3({
-    required MediaAnalysis media,
+    required dynamic media,
     required String audioPath,
     required String outputPath,
     required CancelToken cancelToken,

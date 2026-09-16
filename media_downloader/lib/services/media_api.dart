@@ -1,105 +1,134 @@
-import 'package:dio/dio.dart';
+import 'dart:convert';
+import 'package:http/http.dart' as http;
 
 import '../models/analyser.dart';
 
 class MediaApi {
-  final Dio _dio = Dio(
-    BaseOptions(
-      baseUrl:
-          'https://mp34-downloader-api.onrender.com',
+  // Replace this with your actual Render URL.
+  static const String baseUrl =
+      'https://mp34-downloader-api.onrender.com';
 
-      connectTimeout:
-          const Duration(seconds: 30),
-
-      sendTimeout:
-          const Duration(seconds: 30),
-
-      receiveTimeout:
-          const Duration(minutes: 10),
-
+  Future<MediaInfo> analyse(String url) async {
+    final response = await http.post(
+      Uri.parse('$baseUrl/analyze'),
       headers: {
-        'User-Agent':
-            'Mozilla/5.0 (Android) MP34Downloader',
-        'Accept': '*/*',
+        'Content-Type': 'application/json',
       },
-    ),
-  );
-
-  // ============================================================
-  // ANALYZE MEDIA
-  // ============================================================
-
-  Future<MediaAnalysis> analyze(
-    String url,
-  ) async {
-    final response = await _dio.post(
-      '/analyze',
-      data: {
+      body: jsonEncode({
         'url': url,
-      },
+      }),
     );
 
-    if (response.statusCode != 200) {
-      throw Exception(
-        'Analysis failed: HTTP ${response.statusCode}',
-      );
+    if (response.statusCode == 200) {
+      final data = jsonDecode(response.body);
+
+      return MediaInfo.fromJson(data);
     }
 
-    if (response.data is! Map) {
+    try {
+      final error = jsonDecode(response.body);
+
       throw Exception(
-        'The server returned an invalid response.',
+        error['detail'] ??
+            'Unable to analyse this media link.',
+      );
+    } catch (_) {
+      throw Exception(
+        'Unable to analyse this media link. '
+        'Server returned ${response.statusCode}.',
       );
     }
-
-    return MediaAnalysis.fromJson(
-      Map<String, dynamic>.from(
-        response.data as Map,
-      ),
-    );
   }
 
-  // ============================================================
-  // DOWNLOAD DIRECT MEDIA STREAM
-  // ============================================================
-
-  Future<void> downloadStream({
+  Future<DownloadResult> download({
     required String url,
-    required String savePath,
-    required CancelToken cancelToken,
-    required void Function(
-      int received,
-      int total,
-    ) onProgress,
+    String? formatId,
+    String mediaType = 'video',
+    String audioFormat = 'mp3',
   }) async {
-    await _dio.download(
-      url,
-      savePath,
+    final response = await http.post(
+      Uri.parse('$baseUrl/download'),
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: jsonEncode({
+        'url': url,
+        'format_id': formatId,
+        'media_type': mediaType,
+        'audio_format': audioFormat,
+      }),
+    );
 
-      cancelToken: cancelToken,
+    if (response.statusCode == 200) {
+      final data = jsonDecode(response.body);
 
-      onReceiveProgress:
-          onProgress,
+      return DownloadResult.fromJson(
+        data,
+        baseUrl,
+      );
+    }
 
-      options: Options(
-        headers: {
-          'User-Agent':
-              'Mozilla/5.0 (Android) MP34Downloader',
-          'Accept': '*/*',
-        },
+    try {
+      final error = jsonDecode(response.body);
 
-        followRedirects: true,
+      throw Exception(
+        error['detail'] ??
+            'Download failed.',
+      );
+    } catch (_) {
+      throw Exception(
+        'Download failed. '
+        'Server returned ${response.statusCode}.',
+      );
+    }
+  }
+}
 
-        maxRedirects: 10,
 
-        responseType:
-            ResponseType.bytes,
+class DownloadResult {
+  final bool success;
+  final String platform;
+  final String title;
+  final String mediaType;
+  final String formatId;
+  final String filename;
+  final int size;
+  final String downloadUrl;
 
-        validateStatus: (status) {
-          return status != null &&
-              status >= 200 &&
-              status < 400;
-        },
-      ),
+  DownloadResult({
+    required this.success,
+    required this.platform,
+    required this.title,
+    required this.mediaType,
+    required this.formatId,
+    required this.filename,
+    required this.size,
+    required this.downloadUrl,
+  });
+
+  factory DownloadResult.fromJson(
+    Map<String, dynamic> json,
+    String baseUrl,
+  ) {
+    final relativeUrl =
+        json['download_url'] as String? ?? '';
+
+    return DownloadResult(
+      success: json['success'] == true,
+      platform:
+          json['platform'] as String? ?? '',
+      title:
+          json['title'] as String? ?? '',
+      mediaType:
+          json['media_type'] as String? ?? '',
+      formatId:
+          json['format_id'] as String? ?? '',
+      filename:
+          json['filename'] as String? ?? '',
+      size:
+          (json['size'] as num?)?.toInt() ?? 0,
+      downloadUrl:
+          '$baseUrl$relativeUrl',
     );
   }
 }

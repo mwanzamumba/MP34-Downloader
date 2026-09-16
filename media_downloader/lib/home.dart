@@ -19,7 +19,9 @@ class _HomepageState extends State<Homepage> {
 
   final MediaApi _api = MediaApi();
 
-  MediaAnalysis? _media;
+  // Keep the concrete analysis model supplied by MediaApi without referring
+  // to a type that is not declared by the analyser model.
+  dynamic _media;
 
   bool _analysing = false;
   bool _downloading = false;
@@ -59,7 +61,7 @@ class _HomepageState extends State<Homepage> {
     });
 
     try {
-      final result = await _api.analyze(url);
+      final result = await _api.analyse(url);
 
       if (!mounted) return;
 
