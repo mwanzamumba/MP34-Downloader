@@ -286,60 +286,27 @@ def node_available() -> bool:
 # ============================================================
 # YT-DLP OPTIONS
 # ============================================================
-
 def get_ytdlp_options(
     skip_download: bool = True,
     cookie_file: Optional[str] = None,
 ):
 
     options = {
-
         "quiet": True,
-
         "no_warnings": False,
-
-        # Prevent external yt-dlp config
-        # from selecting a format.
         "ignoreconfig": True,
-
         "noplaylist": True,
-
         "socket_timeout": 30,
-
         "retries": 3,
-
         "fragment_retries": 3,
-
-        # Node JS challenge solving
         "js_runtimes": {
             "node": {}
         },
-
         "skip_download": skip_download,
     }
 
-    # --------------------------------------------------------
-    # YouTube-specific extractor settings
-    # --------------------------------------------------------
-
-    options[
-        "extractor_args"
-    ] = {
-
-        "youtube": {
-
-            "player_client": [
-                "web",
-                "android",
-            ],
-        }
-    }
-
     if cookie_file:
-
-        options[
-            "cookiefile"
-        ] = cookie_file
+        options["cookiefile"] = cookie_file
 
     return options
 
