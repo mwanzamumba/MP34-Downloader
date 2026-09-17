@@ -6,7 +6,6 @@ class MediaInfo {
   final int? duration;
 
   final List<MediaFormat> formats;
-
   final List<MediaFormat> videoFormats;
   final List<MediaFormat> audioFormats;
   final List<MediaFormat> progressiveFormats;
@@ -29,143 +28,202 @@ class MediaInfo {
   });
 
   factory MediaInfo.fromJson(Map<String, dynamic> json) {
-    final List<MediaFormat> parsedFormats = [];
+    final List<MediaFormat> parsedFormats =
+        _parseFormats(json['formats']);
 
-    final dynamic formatsJson = json['formats'];
+    /*
+     * If the backend ever sends the separated lists without
+     * a complete "formats" list, include them as well.
+     */
+    final List<MediaFormat> backendVideoFormats =
+        _parseFormats(json['video_formats']);
 
-    if (formatsJson is List) {
-      for (final item in formatsJson) {
-        if (item is Map<String, dynamic>) {
-          parsedFormats.add(
-            MediaFormat.fromJson(item),
-          );
-        } else if (item is Map) {
-          parsedFormats.add(
-            MediaFormat.fromJson(
-              Map<String, dynamic>.from(item),
-            ),
-          );
-        }
+    final List<MediaFormat> backendAudioFormats =
+        _parseFormats(json['audio_formats']);
+
+    /*
+     * Use formats as the main source.
+     *
+     * If formats is empty, fall back to the separate
+     * backend lists.
+     */
+    final List<MediaFormat> allFormats = [];
+
+    void addUnique(MediaFormat format) {
+      if (format.formatId.isEmpty) {
+        return;
+      }
+
+      final bool alreadyExists = allFormats.any(
+        (existing) =>
+            existing.formatId == format.formatId,
+      );
+
+      if (!alreadyExists) {
+        allFormats.add(format);
       }
     }
 
+    for (final format in parsedFormats) {
+      addUnique(format);
+    }
+
+    for (final format in backendVideoFormats) {
+      addUnique(format);
+    }
+
+    for (final format in backendAudioFormats) {
+      addUnique(format);
+    }
+
+    /*
+     * Build video/audio/progressive lists from the
+     * actual codec information.
+     */
     final List<MediaFormat> parsedVideoFormats =
-        parsedFormats.where((format) {
+        allFormats.where((format) {
       return format.hasVideo;
     }).toList();
 
     final List<MediaFormat> parsedAudioFormats =
-        parsedFormats.where((format) {
+        allFormats.where((format) {
       return format.hasAudio && !format.hasVideo;
     }).toList();
 
     final List<MediaFormat> parsedProgressiveFormats =
-        parsedFormats.where((format) {
+        allFormats.where((format) {
       return format.hasVideo && format.hasAudio;
     }).toList();
 
+    /*
+     * Backend recommendations.
+     */
     MediaFormat? recommendedVideo;
-
     MediaFormat? recommendedAudio;
 
-    /*
-     * Try to read recommendations from the backend.
-     */
-    if (json['recommended_video'] is Map) {
-      recommendedVideo = MediaFormat.fromJson(
+    final dynamic recommendedVideoJson =
+        json['recommended_video'];
+
+    if (recommendedVideoJson is Map) {
+      recommendedVideo =
+          MediaFormat.fromJson(
         Map<String, dynamic>.from(
-          json['recommended_video'],
+          recommendedVideoJson,
         ),
       );
     }
 
-    if (json['recommended_audio'] is Map) {
-      recommendedAudio = MediaFormat.fromJson(
+    final dynamic recommendedAudioJson =
+        json['recommended_audio'];
+
+    if (recommendedAudioJson is Map) {
+      recommendedAudio =
+          MediaFormat.fromJson(
         Map<String, dynamic>.from(
-          json['recommended_audio'],
+          recommendedAudioJson,
         ),
       );
     }
 
     /*
-     * If backend did not provide recommended video,
-     * choose one locally.
+     * If backend recommendation is missing,
+     * choose locally.
      */
-    if (recommendedVideo == null) {
-      if (parsedProgressiveFormats.isNotEmpty) {
-        recommendedVideo = _bestVideo(
-          parsedProgressiveFormats,
-        );
-      } else if (parsedVideoFormats.isNotEmpty) {
-        recommendedVideo = _bestVideo(
-          parsedVideoFormats,
-        );
-      }
-    }
+    recommendedVideo ??= _bestVideo(
+      parsedVideoFormats,
+    );
+
+    recommendedAudio ??= _bestAudio(
+      parsedAudioFormats,
+    );
 
     /*
-     * If backend did not provide recommended audio,
-     * choose one locally.
-     */
-    if (recommendedAudio == null) {
-      if (parsedAudioFormats.isNotEmpty) {
-        recommendedAudio = _bestAudio(
-          parsedAudioFormats,
-        );
-      } else if (parsedProgressiveFormats.isNotEmpty) {
-        recommendedAudio = _bestAudio(
-          parsedProgressiveFormats,
-        );
-      }
-    }
-
-    /*
-     * Duration can come as int, double or null.
+     * Duration.
      */
     int? parsedDuration;
 
-    final dynamic durationValue = json['duration'];
+    final dynamic durationValue =
+        json['duration'];
 
     if (durationValue is num) {
-      parsedDuration = durationValue.toInt();
+      parsedDuration =
+          durationValue.toInt();
     } else if (durationValue != null) {
-      parsedDuration = int.tryParse(
+      parsedDuration =
+          int.tryParse(
         durationValue.toString(),
       );
     }
 
     return MediaInfo(
       success: json['success'] == true,
-      title: json['title']?.toString() ?? 'Unknown title',
-      platform: json['platform']?.toString() ?? 'Unknown',
-      thumbnail: json['thumbnail']?.toString(),
+      title:
+          json['title']?.toString() ??
+              'Unknown title',
+      platform:
+          json['platform']?.toString() ??
+              'Unknown',
+      thumbnail:
+          _nullableString(
+        json['thumbnail'],
+      ),
       duration: parsedDuration,
-      formats: parsedFormats,
+      formats: allFormats,
       videoFormats: parsedVideoFormats,
       audioFormats: parsedAudioFormats,
-      progressiveFormats: parsedProgressiveFormats,
-      recommendedVideo: recommendedVideo,
-      recommendedAudio: recommendedAudio,
+      progressiveFormats:
+          parsedProgressiveFormats,
+      recommendedVideo:
+          recommendedVideo,
+      recommendedAudio:
+          recommendedAudio,
     );
+  }
+
+  // ============================================================
+  // FORMAT PARSER
+  // ============================================================
+
+  static List<MediaFormat> _parseFormats(
+    dynamic value,
+  ) {
+    final List<MediaFormat> result = [];
+
+    if (value is! List) {
+      return result;
+    }
+
+    for (final item in value) {
+      if (item is Map) {
+        try {
+          final format =
+              MediaFormat.fromJson(
+            Map<String, dynamic>.from(item),
+          );
+
+          if (format.formatId.isNotEmpty) {
+            result.add(format);
+          }
+        } catch (_) {
+          /*
+           * Ignore one malformed format instead of
+           * breaking the entire analysis response.
+           */
+        }
+      }
+    }
+
+    return result;
   }
 
   // ============================================================
   // COMPATIBILITY GETTERS
   // ============================================================
 
-  /*
-   * This fixes:
-   *
-   * NoSuchMethodError:
-   * Class 'MediaInfo' has no instance getter 'video'
-   */
   MediaFormat? get video {
     return getVideo();
   }
 
-  /*
-   * Compatibility getter for old UI/business logic.
-   */
   MediaFormat? get audio {
     return getAudio();
   }
@@ -175,26 +233,16 @@ class MediaInfo {
   // ============================================================
 
   MediaFormat? getVideo() {
-    /*
-     * First use backend recommendation.
-     */
     if (recommendedVideo != null) {
       return recommendedVideo;
     }
 
-    /*
-     * Prefer progressive formats because they contain
-     * both video and audio.
-     */
     if (progressiveFormats.isNotEmpty) {
       return _bestVideo(
         progressiveFormats,
       );
     }
 
-    /*
-     * Otherwise use video-only formats.
-     */
     if (videoFormats.isNotEmpty) {
       return _bestVideo(
         videoFormats,
@@ -209,25 +257,16 @@ class MediaInfo {
   // ============================================================
 
   MediaFormat? getAudio() {
-    /*
-     * First use backend recommendation.
-     */
     if (recommendedAudio != null) {
       return recommendedAudio;
     }
 
-    /*
-     * Prefer audio-only formats.
-     */
     if (audioFormats.isNotEmpty) {
       return _bestAudio(
         audioFormats,
       );
     }
 
-    /*
-     * Fall back to progressive formats.
-     */
     if (progressiveFormats.isNotEmpty) {
       return _bestAudio(
         progressiveFormats,
@@ -238,7 +277,7 @@ class MediaInfo {
   }
 
   // ============================================================
-  // OTHER COMPATIBILITY METHODS
+  // COMPATIBILITY METHODS
   // ============================================================
 
   MediaFormat? getBestVideo() {
@@ -250,7 +289,7 @@ class MediaInfo {
   }
 
   // ============================================================
-  // BEST VIDEO FORMAT
+  // BEST VIDEO
   // ============================================================
 
   static MediaFormat? _bestVideo(
@@ -265,10 +304,15 @@ class MediaInfo {
 
     sorted.sort(
       (a, b) {
-        final int heightA = a.height ?? 0;
-        final int heightB = b.height ?? 0;
+        final int heightA =
+            a.height ?? 0;
 
-        return heightB.compareTo(heightA);
+        final int heightB =
+            b.height ?? 0;
+
+        return heightB.compareTo(
+          heightA,
+        );
       },
     );
 
@@ -276,7 +320,7 @@ class MediaInfo {
   }
 
   // ============================================================
-  // BEST AUDIO FORMAT
+  // BEST AUDIO
   // ============================================================
 
   static MediaFormat? _bestAudio(
@@ -305,8 +349,30 @@ class MediaInfo {
 
     return sorted.first;
   }
-}
 
+  // ============================================================
+  // STRING HELPER
+  // ============================================================
+
+  static String? _nullableString(
+    dynamic value,
+  ) {
+    if (value == null) {
+      return null;
+    }
+
+    final String text =
+        value.toString().trim();
+
+    if (text.isEmpty ||
+        text == 'null' ||
+        text == 'none') {
+      return null;
+    }
+
+    return text;
+  }
+}
 
 // ================================================================
 // MEDIA FORMAT
@@ -315,7 +381,6 @@ class MediaInfo {
 class MediaFormat {
   final String formatId;
   final String? ext;
-
   final String? formatNote;
 
   final int? width;
@@ -366,9 +431,6 @@ class MediaFormat {
       json['acodec'],
     );
 
-    /*
-     * Determine whether the format contains video.
-     */
     final bool parsedHasVideo =
         json['has_video'] == true ||
         (
@@ -377,9 +439,6 @@ class MediaFormat {
           parsedVcodec != 'none'
         );
 
-    /*
-     * Determine whether the format contains audio.
-     */
     final bool parsedHasAudio =
         json['has_audio'] == true ||
         (
@@ -390,7 +449,8 @@ class MediaFormat {
 
     return MediaFormat(
       formatId:
-          json['format_id']?.toString() ?? '',
+          json['format_id']?.toString() ??
+              '',
 
       ext:
           _nullableString(
@@ -459,12 +519,9 @@ class MediaFormat {
     return filesize ?? filesizeApprox;
   }
 
-  // ============================================================
-  // DISPLAY SIZE
-  // ============================================================
-
   String get sizeLabel {
-    final int? size = effectiveFilesize;
+    final int? size =
+        effectiveFilesize;
 
     if (size == null || size <= 0) {
       return 'Size unknown';
@@ -503,7 +560,7 @@ class MediaFormat {
   }
 
   // ============================================================
-  // FORMAT TYPE
+  // TYPE
   // ============================================================
 
   String get typeLabel {

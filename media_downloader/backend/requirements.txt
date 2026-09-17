@@ -1,6 +1,5 @@
 fastapi
 uvicorn[standard]
-yt-dlp[default]
-yt-dlp-ejs
-httpx
+yt-dlp
 python-multipart
+bgutil-ytdlp-pot-provider
