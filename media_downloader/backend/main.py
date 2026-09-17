@@ -1,4 +1,5 @@
 import os
+import re
 import time
 import uuid
 import shutil
@@ -17,37 +18,61 @@ from pydantic import BaseModel
 
 
 # ============================================================
-# CONFIGURATION
+# APPLICATION CONFIGURATION
 # ============================================================
 
-APP_VERSION = "5.0.0"
+APP_VERSION = "6.0.0"
 
 BASE_DIR = Path(__file__).resolve().parent
 
 DOWNLOAD_DIR = BASE_DIR / "downloads"
+
 DOWNLOAD_DIR.mkdir(
     parents=True,
     exist_ok=True,
 )
 
+# Files older than this are deleted.
 FILE_TTL = 1800
+
+# Maximum final filename stem length.
+# The extension is added separately by yt-dlp.
+MAX_FILENAME_LENGTH = 80
 
 
 # ============================================================
 # YOUTUBE CONFIGURATION
 # ============================================================
 
+# bgutil-ytdlp-pot-provider HTTP server
+#
+# Default provider address:
+# http://127.0.0.1:4416
+#
+# Can be changed through Render environment variables.
 BGUTIL_PROVIDER_URL = os.getenv(
     "BGUTIL_PROVIDER_URL",
     "http://127.0.0.1:4416",
-)
+).rstrip("/")
 
+
+# Optional Base64 encoded Netscape cookie file.
+#
+# This is NOT required for normal public videos.
+#
+# If you configure this in Render:
+#
+# YOUTUBE_COOKIES_BASE64=<base64-cookie-file>
+#
 YOUTUBE_COOKIES_BASE64 = os.getenv(
     "YOUTUBE_COOKIES_BASE64",
     "",
-)
+).strip()
 
-YOUTUBE_COOKIES_FILE = DOWNLOAD_DIR / "youtube_cookies.txt"
+
+YOUTUBE_COOKIES_FILE = (
+    DOWNLOAD_DIR / "youtube_cookies.txt"
+)
 
 
 # ============================================================
@@ -63,7 +88,7 @@ logger = logging.getLogger(__name__)
 
 
 # ============================================================
-# FASTAPI APP
+# FASTAPI
 # ============================================================
 
 app = FastAPI(
@@ -118,6 +143,10 @@ def detect_platform(url: str) -> str:
         if host.startswith("m."):
             host = host[2:]
 
+        # ----------------------------------------------------
+        # YouTube
+        # ----------------------------------------------------
+
         if (
             host == "youtube.com"
             or host.endswith(".youtube.com")
@@ -125,11 +154,19 @@ def detect_platform(url: str) -> str:
         ):
             return "youtube"
 
+        # ----------------------------------------------------
+        # TikTok
+        # ----------------------------------------------------
+
         if (
             host == "tiktok.com"
             or host.endswith(".tiktok.com")
         ):
             return "tiktok"
+
+        # ----------------------------------------------------
+        # Instagram
+        # ----------------------------------------------------
 
         if (
             host == "instagram.com"
@@ -137,12 +174,20 @@ def detect_platform(url: str) -> str:
         ):
             return "instagram"
 
+        # ----------------------------------------------------
+        # Facebook
+        # ----------------------------------------------------
+
         if (
             host == "facebook.com"
             or host.endswith(".facebook.com")
             or host == "fb.watch"
         ):
             return "facebook"
+
+        # ----------------------------------------------------
+        # Twitter / X
+        # ----------------------------------------------------
 
         if (
             host == "twitter.com"
@@ -163,9 +208,12 @@ def detect_platform(url: str) -> str:
 # URL VALIDATION
 # ============================================================
 
-def validate_url(url: str):
+def validate_url(
+    url: str,
+) -> str:
 
     if not url:
+
         raise HTTPException(
             status_code=400,
             detail="URL is required.",
@@ -179,9 +227,13 @@ def validate_url(url: str):
             "https://",
         )
     ):
+
         raise HTTPException(
             status_code=400,
-            detail="Please provide a valid HTTP or HTTPS URL.",
+            detail=(
+                "Please provide a valid "
+                "HTTP or HTTPS URL."
+            ),
         )
 
     return url
@@ -191,7 +243,9 @@ def validate_url(url: str):
 # YOUTUBE URL NORMALIZATION
 # ============================================================
 
-def normalize_youtube_url(url: str) -> str:
+def normalize_youtube_url(
+    url: str,
+) -> str:
 
     try:
 
@@ -208,7 +262,11 @@ def normalize_youtube_url(url: str) -> str:
 
         if host == "youtu.be":
 
-            video_id = parsed.path.strip("/")
+            video_id = (
+                parsed.path
+                .strip("/")
+                .split("/")[0]
+            )
 
             if video_id:
 
@@ -218,10 +276,12 @@ def normalize_youtube_url(url: str) -> str:
                 )
 
         # ----------------------------------------------------
-        # youtube.com/shorts/<id>
+        # YouTube
         # ----------------------------------------------------
 
-        if host.endswith("youtube.com"):
+        if host.endswith(
+            "youtube.com"
+        ):
 
             path_parts = [
                 part
@@ -229,9 +289,14 @@ def normalize_youtube_url(url: str) -> str:
                 if part
             ]
 
+            # ------------------------------------------------
+            # /shorts/<id>
+            # ------------------------------------------------
+
             if (
                 len(path_parts) >= 2
-                and path_parts[0].lower() == "shorts"
+                and path_parts[0].lower()
+                == "shorts"
             ):
 
                 video_id = path_parts[1]
@@ -242,18 +307,39 @@ def normalize_youtube_url(url: str) -> str:
                 )
 
             # ------------------------------------------------
-            # youtube.com/watch?v=<id>
+            # /live/<id>
+            # ------------------------------------------------
+
+            if (
+                len(path_parts) >= 2
+                and path_parts[0].lower()
+                == "live"
+            ):
+
+                video_id = path_parts[1]
+
+                return (
+                    "https://www.youtube.com/watch?v="
+                    + video_id
+                )
+
+            # ------------------------------------------------
+            # /watch?v=<id>
             # ------------------------------------------------
 
             query = parse_qs(
                 parsed.query
             )
 
-            video_id_list = query.get("v")
+            video_ids = query.get(
+                "v"
+            )
 
-            if video_id_list:
+            if video_ids:
 
-                video_id = video_id_list[0]
+                video_id = (
+                    video_ids[0]
+                )
 
                 return (
                     "https://www.youtube.com/watch?v="
@@ -274,12 +360,13 @@ def normalize_youtube_url(url: str) -> str:
 def setup_youtube_cookies():
 
     """
-    Creates a Netscape-format cookie file from the
+    Creates the YouTube cookie file from the
     YOUTUBE_COOKIES_BASE64 environment variable.
 
     Cookies are optional.
 
-    The server will continue working without cookies.
+    The cookie file is deliberately stored inside
+    DOWNLOAD_DIR and excluded from cleanup.
     """
 
     if not YOUTUBE_COOKIES_BASE64:
@@ -292,12 +379,20 @@ def setup_youtube_cookies():
             YOUTUBE_COOKIES_BASE64
         )
 
+        if not cookie_data:
+
+            logger.warning(
+                "YouTube cookie data is empty."
+            )
+
+            return None
+
         YOUTUBE_COOKIES_FILE.write_bytes(
             cookie_data
         )
 
         logger.info(
-            "YouTube cookies loaded."
+            "YouTube cookies loaded successfully."
         )
 
         return str(
@@ -307,7 +402,7 @@ def setup_youtube_cookies():
     except Exception as exc:
 
         logger.error(
-            "Failed to decode YouTube cookies: %s",
+            "Unable to decode YouTube cookies: %s",
             exc,
         )
 
@@ -315,13 +410,206 @@ def setup_youtube_cookies():
 
 
 # ============================================================
+# SAFE FILENAME
+# ============================================================
+
+def make_safe_filename(
+    title: str,
+    media_id: str | None = None,
+) -> str:
+
+    """
+    Creates a Windows-safe, short filename stem.
+
+    Example:
+
+        Original:
+        My Very Long YouTube Video Title That Goes On And On...
+
+        Result:
+        My_Very_Long_YouTube_Video_Title_That_Goes_On-abc12345
+
+    Maximum:
+        MAX_FILENAME_LENGTH characters
+    """
+
+    # --------------------------------------------------------
+    # Basic fallback
+    # --------------------------------------------------------
+
+    if not title:
+
+        title = "download"
+
+    title = str(title)
+
+    # --------------------------------------------------------
+    # Replace Windows-invalid characters
+    #
+    # < > : " / \ | ? *
+    # --------------------------------------------------------
+
+    title = re.sub(
+        r'[<>:"/\\|?*]',
+        "_",
+        title,
+    )
+
+    # --------------------------------------------------------
+    # Remove control characters
+    # --------------------------------------------------------
+
+    title = re.sub(
+        r"[\x00-\x1f\x7f]",
+        "",
+        title,
+    )
+
+    # --------------------------------------------------------
+    # Collapse whitespace
+    # --------------------------------------------------------
+
+    title = re.sub(
+        r"\s+",
+        " ",
+        title,
+    ).strip()
+
+    # --------------------------------------------------------
+    # Replace problematic dots/spaces at the end
+    # --------------------------------------------------------
+
+    title = title.rstrip(
+        " ."
+    )
+
+    # --------------------------------------------------------
+    # Fallback if nothing remains
+    # --------------------------------------------------------
+
+    if not title:
+
+        title = "download"
+
+    # --------------------------------------------------------
+    # Windows reserved filenames
+    # --------------------------------------------------------
+
+    reserved_names = {
+        "CON",
+        "PRN",
+        "AUX",
+        "NUL",
+        "COM1",
+        "COM2",
+        "COM3",
+        "COM4",
+        "COM5",
+        "COM6",
+        "COM7",
+        "COM8",
+        "COM9",
+        "LPT1",
+        "LPT2",
+        "LPT3",
+        "LPT4",
+        "LPT5",
+        "LPT6",
+        "LPT7",
+        "LPT8",
+        "LPT9",
+    }
+
+    if title.upper() in reserved_names:
+
+        title = (
+            "download_"
+            + title
+        )
+
+    # --------------------------------------------------------
+    # Short unique identifier
+    # --------------------------------------------------------
+
+    if media_id:
+
+        media_id = re.sub(
+            r"[^A-Za-z0-9_-]",
+            "",
+            str(media_id),
+        )
+
+        media_id = media_id[:8]
+
+    else:
+
+        media_id = uuid.uuid4().hex[:8]
+
+    suffix = (
+        "-"
+        + media_id
+    )
+
+    # --------------------------------------------------------
+    # Calculate maximum title portion
+    # --------------------------------------------------------
+
+    available_length = (
+        MAX_FILENAME_LENGTH
+        - len(suffix)
+    )
+
+    if available_length < 10:
+
+        available_length = 10
+
+    # --------------------------------------------------------
+    # Trim title
+    # --------------------------------------------------------
+
+    title = title[
+        :available_length
+    ]
+
+    title = title.rstrip(
+        " ."
+    )
+
+    # --------------------------------------------------------
+    # Final stem
+    # --------------------------------------------------------
+
+    final_name = (
+        title
+        + suffix
+    )
+
+    # --------------------------------------------------------
+    # Final safety check
+    # --------------------------------------------------------
+
+    final_name = final_name.rstrip(
+        " ."
+    )
+
+    if not final_name:
+
+        final_name = (
+            "download-"
+            + uuid.uuid4().hex[:8]
+        )
+
+    return final_name
+
+
+# ============================================================
 # YT-DLP OPTIONS
 # ============================================================
 
 def get_ytdlp_options(
-    download=False,
-    output_template=None,
-    platform=None,
+    download: bool = False,
+    output_template: str | None = None,
+    platform: str | None = None,
 ):
 
     options = {
@@ -365,23 +653,48 @@ def get_ytdlp_options(
 
     if output_template:
 
-        options["outtmpl"] = output_template
+        options[
+            "outtmpl"
+        ] = output_template
 
-    # --------------------------------------------------------
-    # YouTube-specific configuration
-    # --------------------------------------------------------
+    # ========================================================
+    # YOUTUBE
+    # ========================================================
 
     if platform == "youtube":
 
-        options["extractor_args"] = {
+        # Current documented strategy:
+        #
+        # mweb:
+        #   Current recommended client when using a PO token.
+        #
+        # default:
+        #   Provides a fallback to yt-dlp's normal
+        #   client handling.
+        #
+        # bgutil HTTP provider:
+        #   Automatically supplies PO tokens.
+        #
+        options[
+            "extractor_args"
+        ] = {
 
-            "youtube": [
-                "player_client=mweb,web_embedded"
-            ],
+            "youtube": {
 
-            "youtubepot-bgutilhttp": [
-                f"base_url={BGUTIL_PROVIDER_URL}"
-            ],
+                "player_client": [
+                    "mweb",
+                    "default",
+                ],
+
+            },
+
+            "youtubepot-bgutilhttp": {
+
+                "base_url": [
+                    BGUTIL_PROVIDER_URL,
+                ],
+
+            },
 
         }
 
@@ -389,11 +702,15 @@ def get_ytdlp_options(
         # Optional cookies
         # ----------------------------------------------------
 
-        cookie_file = setup_youtube_cookies()
+        cookie_file = (
+            setup_youtube_cookies()
+        )
 
         if cookie_file:
 
-            options["cookiefile"] = cookie_file
+            options[
+                "cookiefile"
+            ] = cookie_file
 
     return options
 
@@ -410,6 +727,7 @@ def format_to_public(
         fmt,
         dict,
     ):
+
         return None
 
     vcodec = fmt.get(
@@ -430,22 +748,6 @@ def format_to_public(
         and acodec != "none"
     )
 
-    width = fmt.get(
-        "width"
-    )
-
-    height = fmt.get(
-        "height"
-    )
-
-    filesize = fmt.get(
-        "filesize"
-    )
-
-    filesize_approx = fmt.get(
-        "filesize_approx"
-    )
-
     return {
 
         "format_id": str(
@@ -463,9 +765,13 @@ def format_to_public(
             "format_note"
         ),
 
-        "width": width,
+        "width": fmt.get(
+            "width"
+        ),
 
-        "height": height,
+        "height": fmt.get(
+            "height"
+        ),
 
         "fps": fmt.get(
             "fps"
@@ -475,9 +781,13 @@ def format_to_public(
 
         "acodec": acodec,
 
-        "filesize": filesize,
+        "filesize": fmt.get(
+            "filesize"
+        ),
 
-        "filesize_approx": filesize_approx,
+        "filesize_approx": fmt.get(
+            "filesize_approx"
+        ),
 
         "abr": fmt.get(
             "abr"
@@ -499,7 +809,7 @@ def format_to_public(
 
 
 # ============================================================
-# FORMAT HELPERS
+# CHOOSE RECOMMENDED VIDEO
 # ============================================================
 
 def choose_recommended_video(
@@ -514,6 +824,7 @@ def choose_recommended_video(
             fmt,
             dict,
         ):
+
             continue
 
         vcodec = fmt.get(
@@ -524,19 +835,24 @@ def choose_recommended_video(
             not vcodec
             or vcodec == "none"
         ):
+
             continue
 
-        height = fmt.get(
-            "height"
-        ) or 0
+        height = (
+            fmt.get("height")
+            or 0
+        )
 
-        width = fmt.get(
-            "width"
-        ) or 0
+        width = (
+            fmt.get("width")
+            or 0
+        )
 
         filesize = (
             fmt.get("filesize")
-            or fmt.get("filesize_approx")
+            or fmt.get(
+                "filesize_approx"
+            )
             or 0
         )
 
@@ -553,21 +869,21 @@ def choose_recommended_video(
 
         return None
 
-    # Prefer highest resolution,
-    # then larger width,
-    # then a known filesize.
-
     candidates.sort(
-        key=lambda x: (
-            x[0],
-            x[1],
-            x[2],
+        key=lambda item: (
+            item[0],
+            item[1],
+            item[2],
         ),
         reverse=True,
     )
 
     return candidates[0][3]
 
+
+# ============================================================
+# CHOOSE RECOMMENDED AUDIO
+# ============================================================
 
 def choose_recommended_audio(
     formats,
@@ -581,6 +897,7 @@ def choose_recommended_audio(
             fmt,
             dict,
         ):
+
             continue
 
         acodec = fmt.get(
@@ -591,6 +908,7 @@ def choose_recommended_audio(
             not acodec
             or acodec == "none"
         ):
+
             continue
 
         vcodec = fmt.get(
@@ -603,15 +921,19 @@ def choose_recommended_audio(
             vcodec
             and vcodec != "none"
         ):
+
             continue
 
-        abr = fmt.get(
-            "abr"
-        ) or 0
+        abr = (
+            fmt.get("abr")
+            or 0
+        )
 
         filesize = (
             fmt.get("filesize")
-            or fmt.get("filesize_approx")
+            or fmt.get(
+                "filesize_approx"
+            )
             or 0
         )
 
@@ -628,15 +950,19 @@ def choose_recommended_audio(
         return None
 
     candidates.sort(
-        key=lambda x: (
-            x[0],
-            x[1],
+        key=lambda item: (
+            item[0],
+            item[1],
         ),
         reverse=True,
     )
 
     return candidates[0][2]
 
+
+# ============================================================
+# CHOOSE AUDIO FOR VIDEO
+# ============================================================
 
 def choose_audio_for_video(
     formats,
@@ -648,7 +974,7 @@ def choose_audio_for_video(
 
 
 # ============================================================
-# FILE CLEANUP
+# CLEANUP OLD FILES
 # ============================================================
 
 def cleanup_old_files():
@@ -663,7 +989,12 @@ def cleanup_old_files():
 
         try:
 
-            if item.name == "youtube_cookies.txt":
+            # Never delete the persistent cookie file.
+
+            if (
+                item.name
+                == "youtube_cookies.txt"
+            ):
 
                 continue
 
@@ -747,13 +1078,17 @@ def health():
 
         "version": APP_VERSION,
 
-        "youtube_pot_provider": (
-            BGUTIL_PROVIDER_URL
-        ),
+        "youtube": {
 
-        "youtube_cookies": bool(
-            YOUTUBE_COOKIES_BASE64
-        ),
+            "pot_provider": (
+                BGUTIL_PROVIDER_URL
+            ),
+
+            "cookies_configured": bool(
+                YOUTUBE_COOKIES_BASE64
+            ),
+
+        },
 
     }
 
@@ -771,7 +1106,9 @@ def version():
 
         "version": APP_VERSION,
 
-        "yt_dlp": yt_dlp.version.__version__,
+        "yt_dlp": (
+            yt_dlp.version.__version__
+        ),
 
     }
 
@@ -795,6 +1132,10 @@ def analyze(
         url
     )
 
+    # --------------------------------------------------------
+    # Normalize YouTube URLs
+    # --------------------------------------------------------
+
     if platform == "youtube":
 
         url = normalize_youtube_url(
@@ -802,7 +1143,7 @@ def analyze(
         )
 
     logger.info(
-        "Analyzing %s URL: %s",
+        "Analyzing media | platform=%s | url=%s",
         platform,
         url,
     )
@@ -830,14 +1171,15 @@ def analyze(
                 "success": False,
 
                 "error": (
-                    "Unable to extract media information."
+                    "Unable to extract "
+                    "media information."
                 ),
 
             }
 
         formats = info.get(
             "formats",
-            []
+            [],
         )
 
         public_formats = []
@@ -848,10 +1190,16 @@ def analyze(
 
         progressive_formats = []
 
+        # ----------------------------------------------------
+        # Convert formats
+        # ----------------------------------------------------
+
         for fmt in formats:
 
-            public_fmt = format_to_public(
-                fmt
+            public_fmt = (
+                format_to_public(
+                    fmt
+                )
             )
 
             if not public_fmt:
@@ -862,13 +1210,17 @@ def analyze(
                 public_fmt
             )
 
-            if public_fmt["has_video"]:
+            if public_fmt[
+                "has_video"
+            ]:
 
                 video_formats.append(
                     public_fmt
                 )
 
-            if public_fmt["has_audio"]:
+            if public_fmt[
+                "has_audio"
+            ]:
 
                 audio_formats.append(
                     public_fmt
@@ -882,6 +1234,10 @@ def analyze(
                 progressive_formats.append(
                     public_fmt
                 )
+
+        # ----------------------------------------------------
+        # Recommended formats
+        # ----------------------------------------------------
 
         recommended_video_raw = (
             choose_recommended_video(
@@ -951,7 +1307,9 @@ def analyze(
 
             "audio_formats": audio_formats,
 
-            "progressive_formats": progressive_formats,
+            "progressive_formats": (
+                progressive_formats
+            ),
 
             "recommended_video": (
                 recommended_video
@@ -966,11 +1324,7 @@ def analyze(
     except Exception as exc:
 
         logger.exception(
-            "Analysis failed."
-        )
-
-        error_message = str(
-            exc
+            "Media analysis failed."
         )
 
         return {
@@ -979,7 +1333,7 @@ def analyze(
 
             "platform": platform,
 
-            "error": error_message,
+            "error": str(exc),
 
         }
 
@@ -1002,6 +1356,10 @@ def download(
     platform = detect_platform(
         url
     )
+
+    # --------------------------------------------------------
+    # Normalize YouTube
+    # --------------------------------------------------------
 
     if platform == "youtube":
 
@@ -1029,15 +1387,17 @@ def download(
         )
 
     logger.info(
-        "Download request | platform=%s | "
-        "media_type=%s | format=%s",
+        "Download request | "
+        "platform=%s | "
+        "type=%s | "
+        "format=%s",
         platform,
         media_type,
         request.format_id,
     )
 
     # ========================================================
-    # EXTRACT MEDIA INFORMATION AGAIN
+    # EXTRACT INFORMATION
     # ========================================================
 
     try:
@@ -1061,7 +1421,8 @@ def download(
     except Exception as exc:
 
         logger.exception(
-            "Could not extract media information."
+            "Unable to extract media "
+            "before download."
         )
 
         raise HTTPException(
@@ -1069,14 +1430,14 @@ def download(
             detail=str(exc),
         )
 
+    # ========================================================
+    # FIND FORMAT
+    # ========================================================
+
     formats = info.get(
         "formats",
-        []
+        [],
     )
-
-    # ========================================================
-    # FIND REQUESTED FORMAT
-    # ========================================================
 
     selected_format = None
 
@@ -1097,47 +1458,67 @@ def download(
         raise HTTPException(
             status_code=404,
             detail=(
-                "Requested format was not found."
+                "Requested format "
+                "was not found."
             ),
         )
 
     # ========================================================
-    # CREATE JOB
+    # CREATE JOB DIRECTORY
     # ========================================================
 
     job_id = uuid.uuid4().hex
 
-    job_dir = DOWNLOAD_DIR / job_id
+    job_dir = (
+        DOWNLOAD_DIR / job_id
+    )
 
     job_dir.mkdir(
         parents=True,
         exist_ok=True,
     )
 
-    title = (
+    # ========================================================
+    # SAFE FILENAME
+    # ========================================================
+
+    original_title = (
         info.get("title")
         or "download"
     )
 
-    safe_title = "".join(
-        char
-        for char in title
-        if char.isalnum()
-        or char in (
-            " ",
-            "-",
-            "_",
-            ".",
-        )
-    ).strip()
+    media_id = (
+        info.get("id")
+        or uuid.uuid4().hex
+    )
 
-    if not safe_title:
+    safe_stem = make_safe_filename(
+        title=original_title,
+        media_id=media_id,
+    )
 
-        safe_title = "download"
+    logger.info(
+        "Original title: %s",
+        original_title,
+    )
+
+    logger.info(
+        "Safe filename stem: %s",
+        safe_stem,
+    )
+
+    # --------------------------------------------------------
+    # IMPORTANT:
+    #
+    # We NEVER put %(title)s directly into the output
+    # template.
+    #
+    # This is what prevents long Windows filenames.
+    # --------------------------------------------------------
 
     output_template = str(
         job_dir
-        / f"{safe_title}.%(ext)s"
+        / f"{safe_stem}.%(ext)s"
     )
 
     # ========================================================
@@ -1152,12 +1533,19 @@ def download(
         ).lower()
 
         allowed_audio_formats = {
+
             "mp3",
+
             "m4a",
+
             "wav",
+
             "aac",
+
             "flac",
+
             "opus",
+
         }
 
         if (
@@ -1170,14 +1558,16 @@ def download(
         download_options = (
             get_ytdlp_options(
                 download=True,
-                output_template=output_template,
+                output_template=(
+                    output_template
+                ),
                 platform=platform,
             )
         )
 
-        download_options["format"] = (
-            request.format_id
-        )
+        download_options[
+            "format"
+        ] = request.format_id
 
         download_options[
             "postprocessors"
@@ -1185,17 +1575,14 @@ def download(
 
             {
 
-                "key": (
-                    "FFmpegExtractAudio"
-                ),
+                "key":
+                    "FFmpegExtractAudio",
 
-                "preferredcodec": (
-                    audio_format
-                ),
+                "preferredcodec":
+                    audio_format,
 
-                "preferredquality": (
-                    "192"
-                ),
+                "preferredquality":
+                    "192",
 
             }
 
@@ -1228,7 +1615,7 @@ def download(
             )
 
         # ----------------------------------------------------
-        # Find resulting audio file
+        # Find output
         # ----------------------------------------------------
 
         output_files = [
@@ -1238,6 +1625,11 @@ def download(
         ]
 
         if not output_files:
+
+            shutil.rmtree(
+                job_dir,
+                ignore_errors=True,
+            )
 
             raise HTTPException(
                 status_code=500,
@@ -1249,7 +1641,9 @@ def download(
 
         output_file = max(
             output_files,
-            key=lambda file: file.stat().st_size,
+            key=lambda file: (
+                file.stat().st_size
+            ),
         )
 
     # ========================================================
@@ -1278,6 +1672,11 @@ def download(
 
         if not has_video:
 
+            shutil.rmtree(
+                job_dir,
+                ignore_errors=True,
+            )
+
             raise HTTPException(
                 status_code=400,
                 detail=(
@@ -1289,7 +1688,9 @@ def download(
         download_options = (
             get_ytdlp_options(
                 download=True,
-                output_template=output_template,
+                output_template=(
+                    output_template
+                ),
                 platform=platform,
             )
         )
@@ -1317,6 +1718,11 @@ def download(
             )
 
             if not audio_format:
+
+                shutil.rmtree(
+                    job_dir,
+                    ignore_errors=True,
+                )
 
                 raise HTTPException(
                     status_code=400,
@@ -1349,7 +1755,7 @@ def download(
             ] = "mp4"
 
         # ----------------------------------------------------
-        # Download video
+        # Execute download
         # ----------------------------------------------------
 
         try:
@@ -1379,7 +1785,7 @@ def download(
             )
 
         # ----------------------------------------------------
-        # Find resulting video
+        # Find output file
         # ----------------------------------------------------
 
         output_files = [
@@ -1389,6 +1795,11 @@ def download(
         ]
 
         if not output_files:
+
+            shutil.rmtree(
+                job_dir,
+                ignore_errors=True,
+            )
 
             raise HTTPException(
                 status_code=500,
@@ -1400,25 +1811,116 @@ def download(
 
         output_file = max(
             output_files,
-            key=lambda file: file.stat().st_size,
+            key=lambda file: (
+                file.stat().st_size
+            ),
         )
 
     # ========================================================
-    # FINAL RESPONSE
+    # FINAL FILE CHECK
     # ========================================================
+
+    if not output_file.exists():
+
+        shutil.rmtree(
+            job_dir,
+            ignore_errors=True,
+        )
+
+        raise HTTPException(
+            status_code=500,
+            detail="Output file was not found.",
+        )
 
     file_size = output_file.stat().st_size
 
+    # ========================================================
+    # FINAL FILENAME SAFETY CHECK
+    # ========================================================
+
+    # This should already be safe because we controlled
+    # the output template. This second check protects us
+    # if a postprocessor changes the filename.
+
+    final_name = output_file.name
+
+    if len(final_name) > (
+        MAX_FILENAME_LENGTH + 10
+    ):
+
+        extension = (
+            output_file.suffix
+        )
+
+        final_stem = (
+            output_file.stem
+        )
+
+        final_stem = make_safe_filename(
+            title=final_stem,
+            media_id=media_id,
+        )
+
+        new_name = (
+            final_stem
+            + extension
+        )
+
+        new_path = (
+            job_dir / new_name
+        )
+
+        try:
+
+            output_file.rename(
+                new_path
+            )
+
+            output_file = new_path
+
+            final_name = (
+                output_file.name
+            )
+
+        except Exception as exc:
+
+            logger.warning(
+                "Unable to rename final file: %s",
+                exc,
+            )
+
+    # ========================================================
+    # DOWNLOAD URL
+    # ========================================================
+
     download_url = (
-        f"/files/{job_id}/"
+        f"/files/"
+        f"{job_id}/"
         f"{output_file.name}"
     )
 
     logger.info(
-        "Download completed | file=%s | size=%s",
+        "Download completed."
+    )
+
+    logger.info(
+        "Final filename: %s",
         output_file.name,
+    )
+
+    logger.info(
+        "Final filename length: %d",
+        len(output_file.name),
+    )
+
+    logger.info(
+        "File size: %d bytes",
         file_size,
     )
+
+    # ========================================================
+    # RESPONSE
+    # ========================================================
 
     return {
 
@@ -1440,7 +1942,7 @@ def download(
 
 
 # ============================================================
-# SERVE DOWNLOADED FILE
+# SERVE FILE
 # ============================================================
 
 @app.get(
@@ -1451,9 +1953,9 @@ def serve_file(
     filename: str,
 ):
 
-    # --------------------------------------------------------
-    # Prevent path traversal
-    # --------------------------------------------------------
+    # ========================================================
+    # PATH SECURITY
+    # ========================================================
 
     if (
         ".." in job_id
@@ -1469,7 +1971,9 @@ def serve_file(
             detail="Invalid file path.",
         )
 
-    job_dir = DOWNLOAD_DIR / job_id
+    job_dir = (
+        DOWNLOAD_DIR / job_id
+    )
 
     file_path = (
         job_dir / filename
@@ -1489,9 +1993,9 @@ def serve_file(
             detail="File not found.",
         )
 
-    # --------------------------------------------------------
-    # Security check
-    # --------------------------------------------------------
+    # ========================================================
+    # VERIFY PATH STAYS INSIDE DOWNLOAD DIRECTORY
+    # ========================================================
 
     try:
 
@@ -1506,9 +2010,9 @@ def serve_file(
             detail="Access denied.",
         )
 
-    # --------------------------------------------------------
-    # MIME type
-    # --------------------------------------------------------
+    # ========================================================
+    # MIME TYPES
+    # ========================================================
 
     extension = (
         file_path.suffix.lower()
@@ -1516,29 +2020,44 @@ def serve_file(
 
     media_types = {
 
-        ".mp4": "video/mp4",
+        ".mp4":
+            "video/mp4",
 
-        ".webm": "video/webm",
+        ".webm":
+            "video/webm",
 
-        ".mkv": "video/x-matroska",
+        ".mkv":
+            "video/x-matroska",
 
-        ".mov": "video/quicktime",
+        ".mov":
+            "video/quicktime",
 
-        ".avi": "video/x-msvideo",
+        ".avi":
+            "video/x-msvideo",
 
-        ".mp3": "audio/mpeg",
+        ".flv":
+            "video/x-flv",
 
-        ".m4a": "audio/mp4",
+        ".mp3":
+            "audio/mpeg",
 
-        ".aac": "audio/aac",
+        ".m4a":
+            "audio/mp4",
 
-        ".wav": "audio/wav",
+        ".aac":
+            "audio/aac",
 
-        ".flac": "audio/flac",
+        ".wav":
+            "audio/wav",
 
-        ".ogg": "audio/ogg",
+        ".flac":
+            "audio/flac",
 
-        ".opus": "audio/opus",
+        ".ogg":
+            "audio/ogg",
+
+        ".opus":
+            "audio/opus",
 
     }
 
@@ -1546,6 +2065,10 @@ def serve_file(
         extension,
         "application/octet-stream",
     )
+
+    # ========================================================
+    # RETURN FILE
+    # ========================================================
 
     return FileResponse(
         path=file_path,
@@ -1558,7 +2081,9 @@ def serve_file(
 # STARTUP
 # ============================================================
 
-@app.on_event("startup")
+@app.on_event(
+    "startup"
+)
 def startup_event():
 
     logger.info(
@@ -1570,7 +2095,7 @@ def startup_event():
     )
 
     logger.info(
-        "App version: %s",
+        "Application version: %s",
         APP_VERSION,
     )
 
@@ -1583,6 +2108,10 @@ def startup_event():
         "yt-dlp version: %s",
         yt_dlp.version.__version__,
     )
+
+    # --------------------------------------------------------
+    # FFmpeg
+    # --------------------------------------------------------
 
     ffmpeg_path = shutil.which(
         "ffmpeg"
@@ -1602,8 +2131,12 @@ def startup_event():
         ffprobe_path or "NOT FOUND",
     )
 
+    # --------------------------------------------------------
+    # YouTube
+    # --------------------------------------------------------
+
     logger.info(
-        "YouTube POT provider: %s",
+        "YouTube PO Token provider: %s",
         BGUTIL_PROVIDER_URL,
     )
 
@@ -1614,11 +2147,24 @@ def startup_event():
         ),
     )
 
+    # --------------------------------------------------------
+    # Load cookies if configured
+    # --------------------------------------------------------
+
     if YOUTUBE_COOKIES_BASE64:
 
         setup_youtube_cookies()
 
+    # --------------------------------------------------------
+    # Cleanup
+    # --------------------------------------------------------
+
     cleanup_old_files()
+
+    logger.info(
+        "Maximum filename length: %d",
+        MAX_FILENAME_LENGTH,
+    )
 
     logger.info(
         "Media Downloader API ready."
