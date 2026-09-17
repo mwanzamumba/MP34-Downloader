@@ -24,9 +24,6 @@ class MediaApi {
       }),
     );
 
-    /*
-     * First check HTTP status.
-     */
     if (response.statusCode != 200) {
       throw Exception(
         'Analysis failed: '
@@ -35,9 +32,6 @@ class MediaApi {
       );
     }
 
-    /*
-     * Decode JSON safely.
-     */
     dynamic decoded;
 
     try {
@@ -47,7 +41,7 @@ class MediaApi {
     } catch (e) {
       throw Exception(
         'Server returned invalid JSON.\n'
-        'Response:\n${response.body}',
+        '${response.body}',
       );
     }
 
@@ -60,9 +54,6 @@ class MediaApi {
     final Map<String, dynamic> data =
         Map<String, dynamic>.from(decoded);
 
-    /*
-     * Backend-level failure.
-     */
     if (data['success'] != true) {
       throw Exception(
         data['error']?.toString() ??
@@ -71,50 +62,27 @@ class MediaApi {
       );
     }
 
-    /*
-     * Parse MediaInfo.
-     *
-     * If parsing fails, expose the actual exception
-     * instead of making the UI simply say
-     * "Failed to analyze".
-     */
     try {
       return MediaInfo.fromJson(
         data,
       );
     } catch (e, stackTrace) {
       print(
-        '================================================',
+        'MEDIA ANALYSIS PARSING ERROR: $e',
       );
 
       print(
-        'MEDIA ANALYSIS PARSING ERROR',
+        stackTrace,
       );
 
       print(
-        'Exception: $e',
-      );
-
-      print(
-        'Stack trace: $stackTrace',
-      );
-
-      print(
-        'Server response:',
-      );
-
-      print(
-        response.body,
-      );
-
-      print(
-        '================================================',
+        'SERVER RESPONSE: ${response.body}',
       );
 
       throw Exception(
         'The link was analyzed successfully, '
-        'but the app could not read the server response.\n'
-        'Error: $e',
+        'but the app could not read the response.\n'
+        '$e',
       );
     }
   }
@@ -143,9 +111,14 @@ class MediaApi {
       }),
     );
 
-    /*
-     * HTTP failure.
-     */
+    print(
+      'DOWNLOAD STATUS: ${response.statusCode}',
+    );
+
+    print(
+      'DOWNLOAD RESPONSE: ${response.body}',
+    );
+
     if (response.statusCode != 200) {
       throw Exception(
         'Download failed: '
@@ -162,25 +135,21 @@ class MediaApi {
       );
     } catch (e) {
       throw Exception(
-        'Server returned invalid JSON '
-        'after download request.\n'
+        'Server returned invalid JSON.\n'
         '${response.body}',
       );
     }
 
     if (decoded is! Map) {
       throw Exception(
-        'Server returned an unexpected '
-        'download response.',
+        'Server returned an unexpected download response.\n'
+        '${response.body}',
       );
     }
 
     final Map<String, dynamic> data =
         Map<String, dynamic>.from(decoded);
 
-    /*
-     * Backend-level failure.
-     */
     if (data['success'] != true) {
       throw Exception(
         data['error']?.toString() ??
@@ -190,51 +159,46 @@ class MediaApi {
     }
 
     /*
-     * Support BOTH:
+     * Our backend uses:
      *
      * downloadUrl
-     *
-     * and
-     *
-     * download_url
-     *
-     * This keeps Flutter compatible with either
-     * backend response style.
      */
-    String? downloadUrl;
+    final dynamic rawDownloadUrl =
+        data['downloadUrl'];
 
-    if (data['downloadUrl'] != null) {
-      downloadUrl =
-          data['downloadUrl'].toString();
-    } else if (data['download_url'] != null) {
-      downloadUrl =
-          data['download_url'].toString();
-    }
-
-    if (downloadUrl == null ||
-        downloadUrl.isEmpty) {
+    if (rawDownloadUrl == null) {
       throw Exception(
         'Server did not return a download URL.\n'
-        'Response:\n${response.body}',
+        'Actual response:\n'
+        '${response.body}',
+      );
+    }
+
+    final String downloadUrl =
+        rawDownloadUrl.toString().trim();
+
+    if (downloadUrl.isEmpty) {
+      throw Exception(
+        'Server returned an empty download URL.\n'
+        'Actual response:\n'
+        '${response.body}',
       );
     }
 
     /*
-     * If backend already returned an absolute URL,
-     * use it directly.
+     * Absolute URL.
      */
     if (downloadUrl.startsWith(
-      'http://',
-    ) ||
+          'http://',
+        ) ||
         downloadUrl.startsWith(
-      'https://',
-    )) {
+          'https://',
+        )) {
       return downloadUrl;
     }
 
     /*
-     * Otherwise treat it as a path returned
-     * by our FastAPI backend.
+     * Relative URL.
      */
     if (downloadUrl.startsWith('/')) {
       return '$baseUrl$downloadUrl';
