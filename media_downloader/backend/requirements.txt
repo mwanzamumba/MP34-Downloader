@@ -3,3 +3,4 @@ uvicorn[standard]
 yt-dlp[default]
 yt-dlp-ejs
 httpx
+python-multipart
