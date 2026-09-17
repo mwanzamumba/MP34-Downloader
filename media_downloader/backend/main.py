@@ -21,7 +21,7 @@ from pydantic import BaseModel
 # APPLICATION CONFIGURATION
 # ============================================================
 
-APP_VERSION = "6.0.0"
+APP_VERSION = "6.1.0"
 
 BASE_DIR = Path(__file__).resolve().parent
 
@@ -47,28 +47,33 @@ MAX_FILENAME_LENGTH = 80
 # bgutil-ytdlp-pot-provider HTTP server
 #
 # Default provider address:
+#
 # http://127.0.0.1:4416
 #
 # Can be changed through Render environment variables.
+
 BGUTIL_PROVIDER_URL = os.getenv(
     "BGUTIL_PROVIDER_URL",
     "http://127.0.0.1:4416",
 ).rstrip("/")
 
 
+# ============================================================
+# OPTIONAL YOUTUBE COOKIES
+# ============================================================
+
 # Optional Base64 encoded Netscape cookie file.
 #
 # This is NOT required for normal public videos.
 #
-# If you configure this in Render:
+# If configured in Render:
 #
 # YOUTUBE_COOKIES_BASE64=<base64-cookie-file>
-#
+
 YOUTUBE_COOKIES_BASE64 = os.getenv(
     "YOUTUBE_COOKIES_BASE64",
     "",
 ).strip()
-
 
 YOUTUBE_COOKIES_FILE = (
     DOWNLOAD_DIR / "youtube_cookies.txt"
@@ -115,13 +120,18 @@ app.add_middleware(
 # ============================================================
 
 class AnalyzeRequest(BaseModel):
+
     url: str
 
 
 class DownloadRequest(BaseModel):
+
     url: str
+
     format_id: str
+
     media_type: str = "video"
+
     audio_format: str | None = None
 
 
@@ -129,7 +139,9 @@ class DownloadRequest(BaseModel):
 # PLATFORM DETECTION
 # ============================================================
 
-def detect_platform(url: str) -> str:
+def detect_platform(
+    url: str,
+) -> str:
 
     try:
 
@@ -138,9 +150,11 @@ def detect_platform(url: str) -> str:
         host = parsed.netloc.lower()
 
         if host.startswith("www."):
+
             host = host[4:]
 
         if host.startswith("m."):
+
             host = host[2:]
 
         # ----------------------------------------------------
@@ -152,6 +166,7 @@ def detect_platform(url: str) -> str:
             or host.endswith(".youtube.com")
             or host == "youtu.be"
         ):
+
             return "youtube"
 
         # ----------------------------------------------------
@@ -162,6 +177,7 @@ def detect_platform(url: str) -> str:
             host == "tiktok.com"
             or host.endswith(".tiktok.com")
         ):
+
             return "tiktok"
 
         # ----------------------------------------------------
@@ -172,6 +188,7 @@ def detect_platform(url: str) -> str:
             host == "instagram.com"
             or host.endswith(".instagram.com")
         ):
+
             return "instagram"
 
         # ----------------------------------------------------
@@ -183,6 +200,7 @@ def detect_platform(url: str) -> str:
             or host.endswith(".facebook.com")
             or host == "fb.watch"
         ):
+
             return "facebook"
 
         # ----------------------------------------------------
@@ -195,6 +213,7 @@ def detect_platform(url: str) -> str:
             or host == "x.com"
             or host.endswith(".x.com")
         ):
+
             return "twitter"
 
         return "unknown"
@@ -254,6 +273,7 @@ def normalize_youtube_url(
         host = parsed.netloc.lower()
 
         if host.startswith("www."):
+
             host = host[4:]
 
         # ----------------------------------------------------
@@ -279,9 +299,7 @@ def normalize_youtube_url(
         # YouTube
         # ----------------------------------------------------
 
-        if host.endswith(
-            "youtube.com"
-        ):
+        if host.endswith("youtube.com"):
 
             path_parts = [
                 part
@@ -337,9 +355,7 @@ def normalize_youtube_url(
 
             if video_ids:
 
-                video_id = (
-                    video_ids[0]
-                )
+                video_id = video_ids[0]
 
                 return (
                     "https://www.youtube.com/watch?v="
@@ -420,14 +436,6 @@ def make_safe_filename(
 
     """
     Creates a Windows-safe, short filename stem.
-
-    Example:
-
-        Original:
-        My Very Long YouTube Video Title That Goes On And On...
-
-        Result:
-        My_Very_Long_YouTube_Video_Title_That_Goes_On-abc12345
 
     Maximum:
         MAX_FILENAME_LENGTH characters
@@ -663,18 +671,16 @@ def get_ytdlp_options(
 
     if platform == "youtube":
 
-        # Current documented strategy:
+        # ----------------------------------------------------
+        # IMPORTANT:
         #
-        # mweb:
-        #   Current recommended client when using a PO token.
+        # Current PO-token configuration:
         #
-        # default:
-        #   Provides a fallback to yt-dlp's normal
-        #   client handling.
+        # mweb + bgutil HTTP provider
         #
-        # bgutil HTTP provider:
-        #   Automatically supplies PO tokens.
-        #
+        # We intentionally use ONLY mweb here.
+        # ----------------------------------------------------
+
         options[
             "extractor_args"
         ] = {
@@ -683,7 +689,6 @@ def get_ytdlp_options(
 
                 "player_client": [
                     "mweb",
-                    "default",
                 ],
 
             },
@@ -697,6 +702,25 @@ def get_ytdlp_options(
             },
 
         }
+
+        # ----------------------------------------------------
+        # Enable detailed yt-dlp logs for YouTube.
+        #
+        # This allows us to verify whether the bgutil
+        # PO-token plugin is actually being loaded.
+        # ----------------------------------------------------
+
+        options[
+            "quiet"
+        ] = False
+
+        options[
+            "no_warnings"
+        ] = False
+
+        options[
+            "verbose"
+        ] = True
 
         # ----------------------------------------------------
         # Optional cookies
@@ -916,7 +940,6 @@ def choose_recommended_audio(
         )
 
         # Audio-only preferred.
-
         if (
             vcodec
             and vcodec != "none"
@@ -1040,21 +1063,28 @@ def root():
 
         "success": True,
 
-        "name": "Media Downloader API",
+        "name":
+            "Media Downloader API",
 
-        "version": APP_VERSION,
+        "version":
+            APP_VERSION,
 
-        "status": "online",
+        "status":
+            "online",
 
         "endpoints": {
 
-            "analyze": "/analyze",
+            "analyze":
+                "/analyze",
 
-            "download": "/download",
+            "download":
+                "/download",
 
-            "health": "/health",
+            "health":
+                "/health",
 
-            "version": "/version",
+            "version":
+                "/version",
 
         },
 
@@ -1074,9 +1104,11 @@ def health():
 
         "success": True,
 
-        "status": "healthy",
+        "status":
+            "healthy",
 
-        "version": APP_VERSION,
+        "version":
+            APP_VERSION,
 
         "youtube": {
 
@@ -1087,6 +1119,9 @@ def health():
             "cookies_configured": bool(
                 YOUTUBE_COOKIES_BASE64
             ),
+
+            "player_client":
+                "mweb",
 
         },
 
@@ -1104,11 +1139,18 @@ def version():
 
         "success": True,
 
-        "version": APP_VERSION,
+        "version":
+            APP_VERSION,
 
         "yt_dlp": (
             yt_dlp.version.__version__
         ),
+
+        "pot_provider":
+            BGUTIL_PROVIDER_URL,
+
+        "youtube_client":
+            "mweb",
 
     }
 
@@ -1273,51 +1315,47 @@ def analyze(
 
         return {
 
-            "success": True,
+            "success":
+                True,
 
-            "platform": platform,
+            "platform":
+                platform,
 
-            "id": info.get(
-                "id"
-            ),
+            "id":
+                info.get("id"),
 
-            "title": info.get(
-                "title"
-            ),
+            "title":
+                info.get("title"),
 
-            "thumbnail": info.get(
-                "thumbnail"
-            ),
+            "thumbnail":
+                info.get("thumbnail"),
 
-            "duration": info.get(
-                "duration"
-            ),
+            "duration":
+                info.get("duration"),
 
-            "uploader": info.get(
-                "uploader"
-            ),
+            "uploader":
+                info.get("uploader"),
 
-            "webpage_url": info.get(
-                "webpage_url"
-            ),
+            "webpage_url":
+                info.get("webpage_url"),
 
-            "formats": public_formats,
+            "formats":
+                public_formats,
 
-            "video_formats": video_formats,
+            "video_formats":
+                video_formats,
 
-            "audio_formats": audio_formats,
+            "audio_formats":
+                audio_formats,
 
-            "progressive_formats": (
-                progressive_formats
-            ),
+            "progressive_formats":
+                progressive_formats,
 
-            "recommended_video": (
-                recommended_video
-            ),
+            "recommended_video":
+                recommended_video,
 
-            "recommended_audio": (
-                recommended_audio
-            ),
+            "recommended_audio":
+                recommended_audio,
 
         }
 
@@ -1331,9 +1369,11 @@ def analyze(
 
             "success": False,
 
-            "platform": platform,
+            "platform":
+                platform,
 
-            "error": str(exc),
+            "error":
+                str(exc),
 
         }
 
@@ -1513,7 +1553,7 @@ def download(
     # We NEVER put %(title)s directly into the output
     # template.
     #
-    # This is what prevents long Windows filenames.
+    # This prevents long filenames.
     # --------------------------------------------------------
 
     output_template = str(
@@ -1535,15 +1575,10 @@ def download(
         allowed_audio_formats = {
 
             "mp3",
-
             "m4a",
-
             "wav",
-
             "aac",
-
             "flac",
-
             "opus",
 
         }
@@ -1619,9 +1654,13 @@ def download(
         # ----------------------------------------------------
 
         output_files = [
+
             file
+
             for file in job_dir.iterdir()
+
             if file.is_file()
+
         ]
 
         if not output_files:
@@ -1789,9 +1828,13 @@ def download(
         # ----------------------------------------------------
 
         output_files = [
+
             file
+
             for file in job_dir.iterdir()
+
             if file.is_file()
+
         ]
 
         if not output_files:
@@ -1837,10 +1880,6 @@ def download(
     # ========================================================
     # FINAL FILENAME SAFETY CHECK
     # ========================================================
-
-    # This should already be safe because we controlled
-    # the output template. This second check protects us
-    # if a postprocessor changes the filename.
 
     final_name = output_file.name
 
@@ -1924,19 +1963,26 @@ def download(
 
     return {
 
-        "success": True,
+        "success":
+            True,
 
-        "job_id": job_id,
+        "job_id":
+            job_id,
 
-        "filename": output_file.name,
+        "filename":
+            output_file.name,
 
-        "downloadUrl": download_url,
+        "downloadUrl":
+            download_url,
 
-        "media_type": media_type,
+        "media_type":
+            media_type,
 
-        "format_id": request.format_id,
+        "format_id":
+            request.format_id,
 
-        "size": file_size,
+        "size":
+            file_size,
 
     }
 
@@ -2141,6 +2187,10 @@ def startup_event():
     )
 
     logger.info(
+        "YouTube player client: mweb",
+    )
+
+    logger.info(
         "YouTube cookies configured: %s",
         bool(
             YOUTUBE_COOKIES_BASE64
@@ -2173,4 +2223,3 @@ def startup_event():
     logger.info(
         "=========================================="
     )
-    
