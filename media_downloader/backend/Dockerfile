@@ -16,10 +16,10 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 # ============================================================
-# NODE.JS 20+
+# NODE.JS 22+
 # ============================================================
 
-RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
+RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
     && apt-get install -y --no-install-recommends nodejs \
     && node --version \
     && npm --version \
