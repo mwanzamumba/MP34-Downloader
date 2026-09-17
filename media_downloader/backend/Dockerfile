@@ -13,8 +13,16 @@ RUN apt-get update \
         curl \
         ca-certificates \
         git \
-        nodejs \
-        npm \
+    && rm -rf /var/lib/apt/lists/*
+
+# ============================================================
+# NODE.JS 20+
+# ============================================================
+
+RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
+    && apt-get install -y --no-install-recommends nodejs \
+    && node --version \
+    && npm --version \
     && rm -rf /var/lib/apt/lists/*
 
 # ============================================================
@@ -58,7 +66,4 @@ RUN mkdir -p /app/downloads
 # START BOTH SERVICES
 # ============================================================
 
-CMD sh -c "\
-    node /opt/bgutil-ytdlp-pot-provider/server/build/main.js --host 127.0.0.1 --port 4416 & \
-    uvicorn main:app --host 0.0.0.0 --port ${PORT:-10000} \
-"
+CMD ["sh", "-c", "node /opt/bgutil-ytdlp-pot-provider/server/build/main.js --host 127.0.0.1 --port 4416 & uvicorn main:app --host 0.0.0.0 --port ${PORT:-10000}"]
