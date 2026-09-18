@@ -425,16 +425,12 @@ class _HomepageState extends State<Homepage> {
         Container(
           width: 46,
           height: 46,
-          decoration: BoxDecoration(
-            color: Colors.deepPurple,
-            borderRadius: BorderRadius.circular(14),
+            padding: const EdgeInsets.all(8),
+            child: Image.asset(
+              'lib/asset/mp34-logo.png',
+              fit: BoxFit.contain,
+            ),
           ),
-          child: const Icon(
-            Icons.download_rounded,
-            color: Colors.white,
-            size: 27,
-          ),
-        ),
 
         const SizedBox(width: 12),
 
@@ -964,7 +960,7 @@ class _HomepageState extends State<Homepage> {
         child: ElevatedButton.icon(
           onPressed: available ? _download : null,
           icon: const Icon(
-            Icons.download_rounded,
+            Icons.file_download_outlined,
           ),
           label: Text(
             available
