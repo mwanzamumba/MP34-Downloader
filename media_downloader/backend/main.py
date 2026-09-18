@@ -161,6 +161,7 @@ class DownloadRequest(BaseModel):
             "wav",
             "flac",
             "opus",
+            "dash"
         }
 
         if value not in allowed:
@@ -1409,15 +1410,15 @@ def analyze_url(
 # DOWNLOAD FORMAT
 # ============================================================
 
-def build_video_format(
-    format_id: str | None,
-):
+def build_video_format(format_id: str | None):
 
     if format_id:
 
         return (
-            f"{format_id}"
-            "/bestvideo+bestaudio"
+            f"{format_id}+bestaudio/"
+            f"{format_id}/"
+            "bestvideo+bestaudio/"
+            "best"
         )
 
     return (
