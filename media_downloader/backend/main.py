@@ -132,11 +132,55 @@ class AnalyzeRequest(BaseModel):
     url: str
 
 
+from pydantic import BaseModel, Field, field_validator
+
 class DownloadRequest(BaseModel):
     url: str
     format_id: str | None = None
     media_type: str = "video"
-    audio_format: str = "mp3"
+
+    # Accept null safely
+    audio_format: str | None = Field(default="mp3")
+
+    @field_validator("audio_format", mode="before")
+    @classmethod
+    def fix_audio_format(cls, value):
+
+        if value is None:
+            return "mp3"
+
+        if not isinstance(value, str):
+            return "mp3"
+
+        value = value.strip().lower()
+
+        allowed = {
+            "mp3",
+            "m4a",
+            "aac",
+            "wav",
+            "flac",
+            "opus",
+        }
+
+        if value not in allowed:
+            return "mp3"
+
+        return value
+
+    @field_validator("media_type", mode="before")
+    @classmethod
+    def fix_media_type(cls, value):
+
+        if value is None:
+            return "video"
+
+        value = str(value).strip().lower()
+
+        if value not in {"video", "audio"}:
+            return "video"
+
+        return value
 
 
 # ============================================================
@@ -2198,8 +2242,6 @@ def startup_event():
     logger.info(
         "=================================================="
     )
-
-    return None
 
     logger.info(
         "Starting Media Downloader API"
