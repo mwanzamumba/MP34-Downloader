@@ -2199,6 +2199,8 @@ def startup_event():
         "=================================================="
     )
 
+    return None
+
     logger.info(
         "Starting Media Downloader API"
     )
